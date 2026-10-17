@@ -30,11 +30,11 @@
 #include "stm8s_it.h"    /* SDCC patch: REQUIRED so SDCC emits the interrupt
                             vector table in this module (the one with main()).
                             Without it only the reset vector is generated and
-                            no ISR (I2C/TIM1/TIM4) ever fires. */
+                            no ISR (I2C/TIM4) ever fires. */
 #include "main.h"
 
 /* Private variables ---------------------------------------------------------*/
-/* Volatile: written from ISRs (TIM4/I2C/TIM1) and read in the main loop. */
+/* Volatile: written from ISRs (TIM4/I2C) and read in the main loop. */
 volatile uint32_t system_ticks = 0;
 volatile uint32_t i2c_last_activity = 0;
 volatile uint8_t i2c_need_reset = 0;
@@ -56,9 +56,8 @@ void main(void)
     hw_reset();
 
     /* Initialise the application modules. These MUST be called: stepper_init()
-       fills in the per-motor pin/channel fields (a zeroed limit_pin would make
-       the limit check read the wrong pin and stop every move), and
-       eeprom_init() restores the saved positions. */
+       fills in the per-motor coil/nSLEEP/nFAULT pin fields, and eeprom_init()
+       restores the saved positions. */
     stepper_init();
     eeprom_init();
     

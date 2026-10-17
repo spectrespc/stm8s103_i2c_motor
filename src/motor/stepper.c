@@ -1,275 +1,205 @@
 #include "main.h"
 #include "stm8s_conf.h"
 #include "stepper.h"
+#include "stepper_logic.h"
 
-/* Stepper motor array */
+/* Stepper motor array (focus = 0, zoom = 1) */
 stepper_t steppers[2];
 
-/* Stepper motor control functions */
+/* TIM4 ticks to wait after raising nSLEEP before emitting the first step, so
+   the DRV8833 charge pump / outputs are valid (datasheet wake time tWAKE). */
+#define STEPPER_WAKE_TICKS 1
+
+/* Private helpers ----------------------------------------------------------*/
+
+/**
+  * @brief  Drive the four coil inputs of one motor to the coast state
+  *         ({0,0} on both H-bridges: coils de-energised).
+  */
+static void stepper_coast(uint8_t motor)
+{
+    stepper_t *s = &steppers[motor];
+    GPIO_WriteLow(s->ain1_port, s->ain1_pin);
+    GPIO_WriteLow(s->ain2_port, s->ain2_pin);
+    GPIO_WriteLow(s->bin1_port, s->bin1_pin);
+    GPIO_WriteLow(s->bin2_port, s->bin2_pin);
+}
+
+/**
+  * @brief  Apply the commutation pattern for the motor's current phase.
+  */
+static void stepper_apply_phase(uint8_t motor)
+{
+    stepper_t *s = &steppers[motor];
+    uint8_t phase = s->phase;
+
+    if (stepper_phase_coil(phase, 0)) GPIO_WriteHigh(s->ain1_port, s->ain1_pin);
+    else                              GPIO_WriteLow (s->ain1_port, s->ain1_pin);
+    if (stepper_phase_coil(phase, 1)) GPIO_WriteHigh(s->ain2_port, s->ain2_pin);
+    else                              GPIO_WriteLow (s->ain2_port, s->ain2_pin);
+    if (stepper_phase_coil(phase, 2)) GPIO_WriteHigh(s->bin1_port, s->bin1_pin);
+    else                              GPIO_WriteLow (s->bin1_port, s->bin1_pin);
+    if (stepper_phase_coil(phase, 3)) GPIO_WriteHigh(s->bin2_port, s->bin2_pin);
+    else                              GPIO_WriteLow (s->bin2_port, s->bin2_pin);
+}
+
+/* Public functions ---------------------------------------------------------*/
+
 void stepper_init(void)
 {
-    /* Initialize stepper motors (TIM1 already configured by hw_tim1_init) */
+    /* NOTE: pin numbers are TSSOP20 pins. PB0-PB3 are not bonded on this
+       package, hence everything lives on ports A/C/D. */
+
+    /* Focus DRV8833 */
     steppers[0].position = 0;
     steppers[0].target = 0;
-    steppers[0].speed = 0;
-    steppers[0].state = 0; /* IDLE */
-    steppers[0].dir_pin = GPIO_PIN_4; /* FOCUS_DIR */
-    steppers[0].en_pin = GPIO_PIN_5; /* FOCUS_EN */
-    steppers[0].limit_pin = GPIO_PIN_1; /* FOCUS_LIMIT */
-    steppers[0].limit_debounce = 0;
-    steppers[0].limit_stable = 0;
-    steppers[0].tim1_channel = 3; /* FOCUS_STEP on PC3 */
-    steppers[0].calibrating = 0;
-    
+    steppers[0].speed = 0;             /* no move until a speed is set */
+    steppers[0].state = STATUS_IDLE;
+    steppers[0].phase = 0;
+    steppers[0].step_acc = 0;
+    steppers[0].wake_ticks = 0;
+    steppers[0].ain1_port = GPIOC; steppers[0].ain1_pin = GPIO_PIN_3;
+    steppers[0].ain2_port = GPIOC; steppers[0].ain2_pin = GPIO_PIN_4;
+    steppers[0].bin1_port = GPIOC; steppers[0].bin1_pin = GPIO_PIN_5;
+    steppers[0].bin2_port = GPIOC; steppers[0].bin2_pin = GPIO_PIN_6;
+    steppers[0].nsleep_port = GPIOD; steppers[0].nsleep_pin = GPIO_PIN_3;
+    steppers[0].nfault_port = GPIOD; steppers[0].nfault_pin = GPIO_PIN_2;
+
+    /* Zoom DRV8833 */
     steppers[1].position = 0;
     steppers[1].target = 0;
     steppers[1].speed = 0;
-    steppers[1].state = 0; /* IDLE */
-    steppers[1].dir_pin = GPIO_PIN_7; /* ZOOM_DIR */
-    steppers[1].en_pin = GPIO_PIN_1; /* ZOOM_EN */
-    steppers[1].limit_pin = GPIO_PIN_2; /* ZOOM_LIMIT */
-    steppers[1].limit_debounce = 0;
-    steppers[1].limit_stable = 0;
-    steppers[1].tim1_channel = 1; /* ZOOM_STEP on PC6 */
-    steppers[1].calibrating = 0;
+    steppers[1].state = STATUS_IDLE;
+    steppers[1].phase = 0;
+    steppers[1].step_acc = 0;
+    steppers[1].wake_ticks = 0;
+    steppers[1].ain1_port = GPIOD; steppers[1].ain1_pin = GPIO_PIN_5;
+    steppers[1].ain2_port = GPIOD; steppers[1].ain2_pin = GPIO_PIN_6;
+    steppers[1].bin1_port = GPIOA; steppers[1].bin1_pin = GPIO_PIN_3;
+    steppers[1].bin2_port = GPIOC; steppers[1].bin2_pin = GPIO_PIN_7;
+    steppers[1].nsleep_port = GPIOA; steppers[1].nsleep_pin = GPIO_PIN_1;
+    steppers[1].nfault_port = GPIOA; steppers[1].nfault_pin = GPIO_PIN_2;
+
+    /* Start with both drivers asleep and both motors coasting. */
+    GPIO_WriteLow(steppers[0].nsleep_port, steppers[0].nsleep_pin);
+    GPIO_WriteLow(steppers[1].nsleep_port, steppers[1].nsleep_pin);
+    stepper_coast(0);
+    stepper_coast(1);
 }
 
 void stepper_move(uint8_t motor, int16_t steps)
 {
+    stepper_t *s;
     int32_t new_target;
 
     if (motor >= 2) return;
+    s = &steppers[motor];
 
-    /* Refuse to move when no speed has been configured. With speed == 0 the
-       PWM (CCR) stays 0 so no STEP pulses are emitted, yet stepper_tick()
-       would still count position - the reported position would diverge from
-       the physical motor. Requiring a speed keeps them consistent. */
-    if (steppers[motor].speed == 0)
+    /* A move without a configured speed would report motion that never
+       happens, so refuse it (the host sets the speed first). */
+    if (s->speed == 0) return;
+    if (steps == 0) return;
+
+    /* Reject a move that would overflow int32_t (position persists across
+       reboots, so overflow is reachable). */
+    if (stepper_move_target(s->position, steps, &new_target) != 0)
         return;
+    s->target = new_target;
 
-    /* Compute the target and reject a move that would overflow int32_t
-       (position persists across reboots, so overflow is reachable). */
-    new_target = steppers[motor].position + (int32_t)steps;
-    if ((steps > 0 && new_target < steppers[motor].position) ||
-        (steps < 0 && new_target > steppers[motor].position))
-        return;
-    steppers[motor].target = new_target;
-
-    /* Set direction for target motor only */
-    if (steps > 0)
-    {
-        if (motor == 0)
-        {
-            GPIO_WriteHigh(GPIOC, GPIO_PIN_4); /* FOCUS_DIR */
-        }
-        else
-        {
-            GPIO_WriteHigh(GPIOC, GPIO_PIN_7); /* ZOOM_DIR */
-        }
-    }
-    else if (steps < 0)
-    {
-        if (motor == 0)
-        {
-            GPIO_WriteLow(GPIOC, GPIO_PIN_4); /* FOCUS_DIR */
-        }
-        else
-        {
-            GPIO_WriteLow(GPIOC, GPIO_PIN_7); /* ZOOM_DIR */
-        }
-    }
-    
-    /* Set motor enable (active low) */
-    if (motor == 0)  GPIO_WriteLow(GPIOC, GPIO_PIN_5);  /* FOCUS_EN */
-    else             GPIO_WriteLow(GPIOD, GPIO_PIN_1);   /* ZOOM_EN */
-    
-    /* Set speed */
-    if (steppers[motor].speed > 0)
-    {
-        uint16_t arr = 16000000 / steppers[motor].speed - 1;
-        if (arr < 1000) arr = 1000;
-        uint16_t ccr = arr / 2;
-        
-        if (motor == 0)
-        {
-            /* FOCUS motor on TIM1_CH3 (PC3) */
-            TIM1->ARRH = (arr >> 8) & 0xFF;
-            TIM1->ARRL = arr & 0xFF;
-            TIM1->CCR3H = (ccr >> 8) & 0xFF;
-            TIM1->CCR3L = ccr & 0xFF;
-        }
-        else
-        {
-            /* ZOOM motor on TIM1_CH1 (PC6) */
-            TIM1->ARRH = (arr >> 8) & 0xFF;
-            TIM1->ARRL = arr & 0xFF;
-            TIM1->CCR1H = (ccr >> 8) & 0xFF;
-            TIM1->CCR1L = ccr & 0xFF;
-        }
-    }
-    
-    steppers[motor].state = STATUS_RUNNING;
+    /* Wake the driver (nSLEEP high) and start stepping. The direction is
+       derived from the sign of (target - position) inside stepper_tick().
+       A move that is already RUNNING keeps stepping without a wake stall;
+       a freshly woken driver waits STEPPER_WAKE_TICKS before the first step. */
+    if (s->state != STATUS_RUNNING)
+        s->wake_ticks = STEPPER_WAKE_TICKS;
+    GPIO_WriteHigh(s->nsleep_port, s->nsleep_pin);
+    s->state = STATUS_RUNNING;
 }
 
 void stepper_stop(uint8_t motor)
 {
+    stepper_t *s;
+
     if (motor >= 2) return;
-    
-    /* Disable motor (active low) */
-    if (motor == 0)
-    {
-        GPIO_WriteHigh(GPIOC, GPIO_PIN_5); /* FOCUS_EN */
-    }
-    else
-    {
-        GPIO_WriteHigh(GPIOD, GPIO_PIN_1); /* ZOOM_EN */
-    }
-    
-    /* Set state to IDLE */
-    steppers[motor].state = 0; /* IDLE */
-    steppers[motor].calibrating = 0;    /* a stopped motor is no longer calibrating */
-    steppers[motor].limit_debounce = 0;
-    eeprom_dirty = 1; /* Mark EEPROM as dirty for saving */
+    s = &steppers[motor];
+
+    /* Coast (de-energise the coils) and put the driver back to sleep. */
+    stepper_coast(motor);
+    GPIO_WriteLow(s->nsleep_port, s->nsleep_pin);
+
+    s->state = STATUS_IDLE;
+    s->step_acc = 0;
+    s->phase = 0;
+    s->wake_ticks = 0;
+
+    eeprom_dirty = 1; /* position changed -> persist it */
 }
 
 void stepper_set_speed(uint8_t motor, uint16_t speed)
 {
     if (motor >= 2) return;
-    
-    /* Clamp speed */
-    if (speed == 0)
-    {
-        speed = 1; /* Minimum speed */
-    }
-    if (speed > MAX_STEP_SPEED)
-    {
-        speed = MAX_STEP_SPEED; /* Maximum speed */
-    }
-    
-    steppers[motor].speed = speed;
+    steppers[motor].speed = stepper_clamp_speed(speed, MAX_STEP_SPEED);
 }
 
-void stepper_calibrate(uint8_t motor, uint16_t speed)
-{
-    if (motor >= 2) return;
-
-    /* Validate the speed exactly like stepper_set_speed(): a zero speed would
-       cause a division by zero below, and the max prevents runaway motion. */
-    if (speed == 0)
-        speed = 1;
-    if (speed > MAX_STEP_SPEED)
-        speed = MAX_STEP_SPEED;
-
-    /* Set direction to move towards limit switch (active low) */
-    if (motor == 0)
-        GPIO_WriteLow(GPIOC, GPIO_PIN_4); /* FOCUS_DIR towards limit */
-    else
-        GPIO_WriteLow(GPIOC, GPIO_PIN_7); /* ZOOM_DIR towards limit */
-    
-    /* Set enable */
-    if (motor == 0)  GPIO_WriteLow(GPIOC, GPIO_PIN_5); /* FOCUS_EN */
-    else             GPIO_WriteLow(GPIOD, GPIO_PIN_1); /* ZOOM_EN */
-    
-    steppers[motor].speed = speed;
-    
-    /* Mark as calibrating so tick() sets position=0 on limit hit */
-    steppers[motor].calibrating = 1;
-    steppers[motor].state = STATUS_RUNNING;
-    
-    /* Start PWM for the motor */
-    uint16_t arr = 16000000 / speed - 1;
-    if (arr < 1000) arr = 1000;
-    uint16_t ccr = arr / 2;
-    
-    if (motor == 0) {
-        TIM1->ARRH = (arr >> 8) & 0xFF;
-        TIM1->ARRL = arr & 0xFF;
-        TIM1->CCR3H = (ccr >> 8) & 0xFF;
-        TIM1->CCR3L = ccr & 0xFF;
-    } else {
-        TIM1->ARRH = (arr >> 8) & 0xFF;
-        TIM1->ARRL = arr & 0xFF;
-        TIM1->CCR1H = (ccr >> 8) & 0xFF;
-        TIM1->CCR1L = ccr & 0xFF;
-    }
-}
-
+/**
+  * @brief  Advance both motors by the steps due this millisecond. Called from
+  *         the TIM4 update ISR (1 ms). Also monitors nFAULT and latches an
+  *         error (coast + sleep) if a driver reports a fault.
+  */
 void stepper_tick(void)
 {
     uint8_t motor;
+    uint8_t steps;
 
     for (motor = 0; motor < 2; motor++)
     {
-        uint8_t limit_hit;
+        stepper_t *s = &steppers[motor];
 
-        if (steppers[motor].state != STATUS_RUNNING)
+        if (s->state != STATUS_RUNNING)
             continue;
 
-        limit_hit = (GPIO_ReadInputPin(GPIOA, steppers[motor].limit_pin) == RESET);
-
-        if (steppers[motor].calibrating)
+        /* nFAULT is open-drain and LOW on fault (overcurrent/thermal/UVLO). */
+        if (GPIO_ReadInputPin(s->nfault_port, s->nfault_pin) == RESET)
         {
-            /* Calibration: move continuously toward the limit switch (DIR was
-               set by stepper_calibrate()). There is no target position - the
-               limit switch ends the motion. */
-            if (steppers[motor].position > CALIB_MIN_POS)
-                steppers[motor].position--;
-            else
-            {
-                /* Travel guard: no limit switch reached within the allowed
-                   range - stop as if the limit was found. */
-                steppers[motor].position = 0;
-                steppers[motor].target = 0;
-                steppers[motor].calibrating = 0;
-                stepper_stop(motor);
-                continue;
-            }
-
-            if (limit_hit)
-            {
-                if (steppers[motor].limit_debounce < DEBOUNCE_MS)
-                    steppers[motor].limit_debounce++;
-                else
-                {
-                    steppers[motor].position = 0;
-                    steppers[motor].target = 0;
-                    steppers[motor].calibrating = 0;
-                    steppers[motor].limit_debounce = 0;
-                    stepper_stop(motor);          /* sets state = IDLE */
-                }
-            }
-            else
-            {
-                steppers[motor].limit_debounce = 0;
-            }
+            stepper_coast(motor);
+            GPIO_WriteLow(s->nsleep_port, s->nsleep_pin);
+            s->state = STATUS_ERROR;
+            s->step_acc = 0;
+            s->wake_ticks = 0;
+            eeprom_dirty = 1;
             continue;
         }
 
-        /* Normal positioned move: one step per PWM pulse toward the target. */
-        if (steppers[motor].position < steppers[motor].target)
-            steppers[motor].position++;
-        else if (steppers[motor].position > steppers[motor].target)
-            steppers[motor].position--;
-
-        if (limit_hit)
+        /* Let a freshly woken driver settle before the first step. */
+        if (s->wake_ticks > 0)
         {
-            if (steppers[motor].limit_debounce < DEBOUNCE_MS)
-                steppers[motor].limit_debounce++;
+            s->wake_ticks--;
+            continue;
+        }
+
+        /* DDA: emit the whole steps due at this motor's speed (<= 5 at max). */
+        steps = stepper_dda_steps(&s->step_acc, s->speed);
+        while (steps-- > 0)
+        {
+            int dir;
+
+            if (s->position < s->target)
+                dir = +1;
+            else if (s->position > s->target)
+                dir = -1;
             else
+                break;
+
+            s->phase = stepper_phase_next(s->phase, dir);
+            s->position += dir;
+
+            stepper_apply_phase(motor);
+
+            if (s->position == s->target)
             {
-                /* Hard limit reached during a normal move: stop immediately. */
-                stepper_stop(motor);
-                steppers[motor].state = STATUS_LIMIT;
-                continue;
+                stepper_stop(motor);   /* sets IDLE, coasts, clears phase/acc */
+                break;
             }
         }
-        else
-        {
-            steppers[motor].limit_debounce = 0;
-        }
-
-        /* Target reached */
-        if (steppers[motor].position == steppers[motor].target)
-            stepper_stop(motor);
     }
 }

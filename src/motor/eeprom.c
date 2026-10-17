@@ -54,12 +54,13 @@ void eeprom_periodic_save(void)
         return;
 
     /* Never program while a motor is stepping. On STM8 the programming stall
-       (up to ~30 ms for 10 bytes) stops the TIM1 update ISR, which would skip
-       step counting and limit checks and would also block a safety STOP. */
+       (up to ~30 ms for 10 bytes) stops the TIM4 update ISR, which would skip
+       step generation (the DDA) and the nFAULT check, and would also block a
+       safety STOP. STATUS_ERROR is not RUNNING, so error positions are saved. */
     if (steppers[0].state == STATUS_RUNNING || steppers[1].state == STATUS_RUNNING)
         return;
 
-    /* Atomic snapshot of the 32-bit positions (written by the TIM1 ISR) */
+    /* Atomic snapshot of the 32-bit positions (written by the TIM4 ISR) */
     sim();
     pos0 = steppers[0].position;
     pos1 = steppers[1].position;

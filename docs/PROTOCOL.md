@@ -18,9 +18,8 @@
 | 0x02 | [cmd][motor][spd_hi][spd_lo] | — | Set speed (uint16 BE, steps/sec, max 5000) |
 | 0x03 | [cmd][motor] | — | Stop motor |
 | 0x04 | [cmd][motor] | [pos_0..pos_3] | Request current position (int32 BE) |
-| 0x05 | [cmd][motor] | [status] | Request status (0=IDLE, 1=RUNNING, 2=ERROR, 3=LIMIT) |
+| 0x05 | [cmd][motor] | [status] | Request status (0=IDLE, 1=RUNNING, 2=ERROR) |
 | 0x06 | [cmd] | — | Software reset controller |
-| 0x07 | [cmd][motor][spd_hi][spd_lo] | — | Calibrate motor to limit switch at speed |
 | 0xFF | [cmd] | [maj][min][pat] | Get firmware version (3 bytes) |
 
 ## Detailed Command Examples
@@ -28,7 +27,7 @@
 ### Version Request
 ```bash
 i2ctransfer -y 7 w1@0x60 0xFF r3
-# Response: 0x01 0x00 0x00 (version 1.0.0)
+# Response: 0x02 0x00 0x00 (version 2.0.0)
 ```
 
 ### Set Speed
@@ -54,19 +53,13 @@ i2ctransfer -y 7 w2@0x60 0x04 0x00 r4
 ```bash
 # Get zoom motor status
 i2ctransfer -y 7 w2@0x60 0x05 0x01 r1
-# Response: 0x00 (IDLE) or 0x01 (RUNNING) etc.
+# Response: 0x00 (IDLE), 0x01 (RUNNING) or 0x02 (ERROR)
 ```
 
 ### Stop Motor
 ```bash
 # Stop zoom motor
 i2ctransfer -y 7 w2@0x60 0x03 0x01
-```
-
-### Calibrate Motor
-```bash
-# Calibrate focus motor to limit switch at 200 steps/sec
-i2ctransfer -y 7 w4@0x60 0x07 0x00 0x00 0xC8
 ```
 
 ### Software Reset
@@ -76,6 +69,6 @@ i2ctransfer -y 7 w1@0x60 0x06
 ```
 
 ## Error Handling
-- NACK on unknown command
+- Unknown commands (including the removed 0x07) are ignored (no NACK)
 - I2C errors (AF/BERR/OVR) → automatic module reset
 - Timeout 2 s without activity → module reset

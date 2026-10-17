@@ -49,15 +49,11 @@
    Therefore main.c MUST include this header, and only the handlers actually
    implemented in stm8s_it.c are declared here, each with its correct STM8S103
    vector number (RM0016, STM8S103 interrupt vector table):
-     11 = TIM1 update/overflow/trigger/break
      19 = I2C
      23 = TIM4 update/overflow                                              */
 
 /* I2C interrupt handler (vector 19) */
 INTERRUPT_HANDLER(I2C_IRQHandler, 19);
-
-/* TIM1 update/overflow/trigger/break (vector 11) */
-INTERRUPT_HANDLER(TIM1_UPD_OVF_TRG_BRK_IRQHandler, 11);
 
 /* TIM4 update/overflow (vector 23) */
 INTERRUPT_HANDLER(TIM4_UPD_OVF_IRQHandler, 23);

@@ -10,7 +10,6 @@
   *          must match the definitions below (same names, same vector numbers).
   *
   *          STM8S103 vector numbers (RM0016):
-  *            11 = TIM1 update/overflow/trigger/break
   *            19 = I2C
   *            23 = TIM4 update/overflow
   ******************************************************************************
@@ -21,19 +20,6 @@
 #include "main.h"
 
 /* Public functions ----------------------------------------------------------*/
-
-/**
-  * @brief  TIM1 Update/Overflow/Trigger/Break interrupt routine (vector 11).
-  *         Fires once per PWM period (i.e. once per STEP pulse). Advances the
-  *         stepper position, checks the target position and the limit switches.
-  * @param  None
-  * @retval None
-  */
-INTERRUPT_HANDLER(TIM1_UPD_OVF_TRG_BRK_IRQHandler, 11)
-{
-    TIM1_ClearITPendingBit(TIM1_IT_UPDATE);
-    stepper_tick();
-}
 
 /**
   * @brief  I2C interrupt routine (vector 19). Delegates to the short I2C state
@@ -48,8 +34,9 @@ INTERRUPT_HANDLER(I2C_IRQHandler, 19)
 
 /**
   * @brief  TIM4 Update/Overflow interrupt routine (vector 23). 1 ms system tick:
-  *         increments the millisecond counter and feeds the watchdog so that a
-  *         hang in the main loop still results in a controlled reset.
+  *         increments the millisecond counter, feeds the watchdog, and drives the
+  *         stepper DDA (stepper_tick() emits the steps due this millisecond and
+  *         checks nFAULT).
   * @param  None
   * @retval None
   */
@@ -58,6 +45,7 @@ INTERRUPT_HANDLER(TIM4_UPD_OVF_IRQHandler, 23)
     TIM4_ClearITPendingBit(TIM4_IT_UPDATE);
     system_ticks++;
     IWDG_ReloadCounter();
+    stepper_tick();
 }
 
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

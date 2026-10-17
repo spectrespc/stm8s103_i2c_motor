@@ -31,14 +31,12 @@
 #define CMD_GET_POSITION 0x04
 #define CMD_GET_STATUS 0x05
 #define CMD_RESET 0x06
-#define CMD_CALIBRATE 0x07
 #define CMD_GET_VERSION 0xFF
 
 // Status codes
 #define STATUS_IDLE 0x00
 #define STATUS_RUNNING 0x01
 #define STATUS_ERROR 0x02
-#define STATUS_LIMIT 0x03
 
 // Error handling
 #define MAX_SPEED 5000
@@ -52,7 +50,6 @@ int set_speed(int fd, uint8_t motor, uint16_t speed);
 int move_motor(int fd, uint8_t motor, int16_t steps);
 int get_position(int fd, uint8_t motor, int32_t *position);
 int get_status(int fd, uint8_t motor, uint8_t *status);
-int calibrate_motor(int fd, uint8_t motor, uint16_t speed);
 int reset_controller(int fd);
 int get_version(int fd, uint8_t *version);
 
@@ -185,7 +182,6 @@ int main(int argc, char *argv[]) {
                         case STATUS_IDLE: status_str = "IDLE"; break;
                         case STATUS_RUNNING: status_str = "RUNNING"; break;
                         case STATUS_ERROR: status_str = "ERROR"; break;
-                        case STATUS_LIMIT: status_str = "LIMIT"; break;
                         default: status_str = "UNKNOWN"; break;
                     }
                     printf("%s motor status: %s (%d)\n", (motor == MOTOR_FOCUS) ? "focus" : "zoom", status_str, status);
@@ -211,30 +207,6 @@ int main(int argc, char *argv[]) {
                     printf("Stopped %s motor\n", (motor == MOTOR_FOCUS) ? "focus" : "zoom");
                 } else {
                     fprintf(stderr, "Failed to stop motor\n");
-                    ret = 1;
-                }
-            }
-        }
-    } else if (strcmp(argv[1], "calibrate") == 0) {
-        if (argc < 4) {
-            fprintf(stderr, "Usage: %s calibrate <motor> <speed>\n", argv[0]);
-            ret = 1;
-        } else {
-            uint8_t motor = (strcmp(argv[2], "focus") == 0) ? MOTOR_FOCUS : 
-                        (strcmp(argv[2], "zoom") == 0) ? MOTOR_ZOOM : 0xFF;
-            uint16_t speed = atoi(argv[3]);
-            
-            if (motor == 0xFF) {
-                fprintf(stderr, "Invalid motor specified\n");
-                ret = 1;
-            } else if (speed > MAX_SPEED) {
-                fprintf(stderr, "Speed must be <= %d\n", MAX_SPEED);
-                ret = 1;
-            } else {
-                if (calibrate_motor(fd, motor, speed) == 0) {
-                    printf("Calibrated %s motor at speed %d\n", (motor == MOTOR_FOCUS) ? "focus" : "zoom", speed);
-                } else {
-                    fprintf(stderr, "Failed to calibrate motor\n");
                     ret = 1;
                 }
             }
@@ -269,7 +241,6 @@ void usage(const char *program_name) {
     fprintf(stderr, "  position <motor>    Get motor position\n");
     fprintf(stderr, "  status <motor>  Get motor status\n");
     fprintf(stderr, "  stop <motor>    Stop motor\n");
-    fprintf(stderr, "  calibrate <motor> <speed>  Calibrate motor to limit\n");
     fprintf(stderr, "  reset          Reset controller\n");
     fprintf(stderr, "\nMotor names: focus, zoom\n");
 }
@@ -399,14 +370,6 @@ int get_status(int fd, uint8_t motor, uint8_t *status) {
     
     *status = read_data[0];
     return 0;
-}
-
-int calibrate_motor(int fd, uint8_t motor, uint16_t speed) {
-    uint8_t speed_data[2];
-    speed_data[0] = (speed >> 8) & 0xFF; // MSB
-    speed_data[1] = speed & 0xFF;          // LSB
-    
-    return send_command(fd, CMD_CALIBRATE, motor, speed_data, 2, NULL, 0);
 }
 
 int reset_controller(int fd) {

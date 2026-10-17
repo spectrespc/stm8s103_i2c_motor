@@ -59,7 +59,14 @@ void hw_clock_init(void)
 }
 
 /**
-  * @brief  Initialize GPIOs
+  * @brief  Initialize GPIOs for the two DRV8833 H-bridge drivers.
+  *
+  * Each DRV8833 stepper channel needs four coil inputs (AIN1/AIN2 for coil A,
+  * BIN1/BIN2 for coil B) plus nSLEEP (output) and nFAULT (input). There is no
+  * STEP/DIR interface: the MCU sequences the coils itself (see stepper.c).
+  *
+  * TSSOP20 note: PB0-PB3 are NOT bonded out on the STM8S103F3P6 TSSOP20 (only
+  * PB4/PB5 exist), so all coil/sleep/fault signals use port A/C/D pins.
   * @param  None
   * @retval None
   */
@@ -74,25 +81,30 @@ void hw_gpio_init(void)
     /* PB4/PB5 - I2C SCL/SDA (open-drain) */
     GPIO_Init(GPIOB, GPIO_PIN_4 | GPIO_PIN_5, GPIO_MODE_OUT_OD_HIZ_FAST);
     
-    /* PC3 - FOCUS_STEP, PC6 - ZOOM_STEP (PP fast) */
-    GPIO_Init(GPIOC, GPIO_PIN_3 | GPIO_PIN_6, GPIO_MODE_OUT_PP_LOW_FAST);
+    /* --- Focus DRV8833 ---
+       PC3=AIN1, PC4=AIN2, PC5=BIN1, PC6=BIN2 (coil outputs, start coasting) */
+    GPIO_Init(GPIOC, GPIO_PIN_3 | GPIO_PIN_4 | GPIO_PIN_5 | GPIO_PIN_6,
+              GPIO_MODE_OUT_PP_LOW_FAST);
+    /* PD3 - nSLEEP (LOW = driver in sleep) */
+    GPIO_Init(GPIOD, GPIO_PIN_3, GPIO_MODE_OUT_PP_LOW_FAST);
+    /* PD2 - nFAULT (open-drain, LOW on fault -> pull-up, read RESET means fault) */
+    GPIO_Init(GPIOD, GPIO_PIN_2, GPIO_MODE_IN_PU_NO_IT);
     
-    /* PC4 - FOCUS_DIR, PC7 - ZOOM_DIR (PP high) */
-    GPIO_Init(GPIOC, GPIO_PIN_4 | GPIO_PIN_7, GPIO_MODE_OUT_PP_HIGH_FAST);
-    
-    /* PC5 - FOCUS_EN, PD1 - ZOOM_EN (PP high) */
-    GPIO_Init(GPIOC, GPIO_PIN_5, GPIO_MODE_OUT_PP_HIGH_FAST);
-    GPIO_Init(GPIOD, GPIO_PIN_1, GPIO_MODE_OUT_PP_HIGH_FAST);
-    
-    /* PA1/PA2 - Limit switches (input with pull-up) */
-    GPIO_Init(GPIOA, GPIO_PIN_1 | GPIO_PIN_2, GPIO_MODE_IN_PU_NO_IT);
+    /* --- Zoom DRV8833 ---
+       PD5=AIN1, PD6=AIN2, PA3=BIN1, PC7=BIN2 (coil outputs) */
+    GPIO_Init(GPIOD, GPIO_PIN_5 | GPIO_PIN_6, GPIO_MODE_OUT_PP_LOW_FAST);
+    GPIO_Init(GPIOA, GPIO_PIN_3, GPIO_MODE_OUT_PP_LOW_FAST);
+    GPIO_Init(GPIOC, GPIO_PIN_7, GPIO_MODE_OUT_PP_LOW_FAST);
+    /* PA1 - nSLEEP */
+    GPIO_Init(GPIOA, GPIO_PIN_1, GPIO_MODE_OUT_PP_LOW_FAST);
+    /* PA2 - nFAULT (pull-up) */
+    GPIO_Init(GPIOA, GPIO_PIN_2, GPIO_MODE_IN_PU_NO_IT);
     
     /* PD4 - LED_STATUS (PP low) */
     GPIO_Init(GPIOD, GPIO_PIN_4, GPIO_MODE_OUT_PP_LOW_FAST);
-    
-    /* Unused pins */
-    GPIO_Init(GPIOB, GPIO_PIN_0 | GPIO_PIN_1 | GPIO_PIN_2 | GPIO_PIN_3, GPIO_MODE_OUT_PP_LOW_SLOW);
-    GPIO_Init(GPIOC, GPIO_PIN_1 | GPIO_PIN_2, GPIO_MODE_OUT_PP_LOW_SLOW);
+
+    /* PD1 is intentionally left in its reset state (input floating): it is the
+       SWIM data pin and must stay free for programming. */
 }
 
 /**
@@ -107,33 +119,6 @@ void hw_iwdg_init(void)
     IWDG_SetReload(250); // ~500ms
     IWDG_ReloadCounter();
     IWDG_Enable();
-}
-
-/**
-  * @brief  Initialize TIM1
-  * @param  None
-  * @retval None
-  */
-void hw_tim1_init(void)
-{
-    /* Enable TIM1 clock */
-    CLK_PeripheralClockConfig(CLK_PERIPHERAL_TIMER1, ENABLE);
-    
-    /* Configure TIM1 time base */
-    TIM1_TimeBaseInit(0, TIM1_COUNTERMODE_UP, 3199, 0); // Prescaler=0, Period=3199, Repetition=0
-    
-    /* Configure TIM1 channels for PWM */
-    TIM1_OC1Init(TIM1_OCMODE_PWM1, TIM1_OUTPUTSTATE_ENABLE, TIM1_OUTPUTNSTATE_DISABLE, 0, TIM1_OCPOLARITY_HIGH, TIM1_OCNPOLARITY_HIGH, TIM1_OCIDLESTATE_SET, TIM1_OCNIDLESTATE_SET);
-    TIM1_OC3Init(TIM1_OCMODE_PWM1, TIM1_OUTPUTSTATE_ENABLE, TIM1_OUTPUTNSTATE_DISABLE, 0, TIM1_OCPOLARITY_HIGH, TIM1_OCNPOLARITY_HIGH, TIM1_OCIDLESTATE_SET, TIM1_OCNIDLESTATE_SET);
-    
-    /* Enable PWM outputs */
-    TIM1_CtrlPWMOutputs(ENABLE);
-    
-    /* Enable update interrupt */
-    TIM1_ITConfig(TIM1_IT_UPDATE, ENABLE);
-    
-    /* Enable TIM1 */
-    TIM1_Cmd(ENABLE);
 }
 
 /**
@@ -181,7 +166,6 @@ void hw_reset(void)
     hw_clock_init();
     hw_gpio_init();
     hw_iwdg_init();
-    hw_tim1_init();
     hw_tim4_init();
     hw_i2c_init();
 }

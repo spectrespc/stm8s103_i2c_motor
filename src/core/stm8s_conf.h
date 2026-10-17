@@ -38,7 +38,6 @@
 #include "stm8s_clk.h"
 #include "stm8s_gpio.h"
 #include "stm8s_i2c.h"
-#include "stm8s_tim1.h"
 #include "stm8s_tim4.h"
 #include "stm8s_iwdg.h"
 #include "stm8s_flash.h"

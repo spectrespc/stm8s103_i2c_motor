@@ -33,7 +33,6 @@ Commands:
   position <motor>    Get motor position
   status <motor>  Get motor status
   stop <motor>    Stop motor
-  calibrate <motor> <speed>  Calibrate motor to limit
   reset          Reset controller
 
 Motor names: focus, zoom
@@ -69,11 +68,6 @@ motorctl status zoom
 Stop focus motor:
 ```bash
 motorctl stop focus
-```
-
-Calibrate zoom motor at 200 steps/sec:
-```bash
-motorctl calibrate zoom 200
 ```
 
 Reset controller:

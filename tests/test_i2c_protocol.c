@@ -2,15 +2,17 @@
  * Host-side unit tests for the I2C command handling logic.
  *
  * The protocol logic lives in firmware sources that are entangled with STM8 SPL
- * register access (I2C->SR1, GPIO_*, TIM1_*, sim()/rim()) and therefore cannot
- * be linked on a Linux host. The pure helpers below mirror the firmware
- * behaviour exactly; keep them in sync when the protocol changes:
+ * register access (I2C->SR1, GPIO_*, sim()/rim()) and therefore cannot be
+ * linked on a Linux host. Shared definitions are taken straight from the
+ * firmware headers; the remaining pure helpers mirror the firmware behaviour
+ * and must be kept in sync when the protocol changes:
  *
- *   i2c_required_len()      -> src/i2c/i2c_slave.c
+ *   MAX_STEP_SPEED          -> src/core/main.h
+ *   i2c_required_len()      -> src/i2c/i2c_proto.h (shared with the firmware)
  *   parse_be16/parse_be32   -> src/i2c/i2c_slave.c (i2c_process_command /
  *                              i2c_prepare_read_response)
- *   clamp_speed()           -> src/motor/stepper.c (stepper_set_speed)
- *   target_would_overflow() -> src/motor/stepper.c (stepper_move)
+ *   clamp_speed()           -> src/motor/stepper_logic.h (stepper_clamp_speed)
+ *   overflow guard          -> src/motor/stepper_logic.h (stepper_move_target)
  *
  * Build and run with: make -C tests test
  */
@@ -18,24 +20,9 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define MAX_STEP_SPEED 5000
-
-static uint8_t i2c_required_len(uint8_t cmd)
-{
-    switch (cmd)
-    {
-        case 0x01: /* move:      cmd, motor, steps_hi, steps_lo */
-        case 0x02: /* set speed: cmd, motor, speed_hi, speed_lo */
-        case 0x07: /* calibrate: cmd, motor, speed_hi, speed_lo */
-            return 4;
-        case 0x03: /* stop:       cmd, motor */
-        case 0x04: /* get pos:    cmd, motor */
-        case 0x05: /* get status: cmd, motor */
-            return 2;
-        default:   /* 0x06 reset, 0xFF version, unknown */
-            return 1;
-    }
-}
+#include "main.h"           /* MAX_STEP_SPEED: shared with the firmware */
+#include "i2c_proto.h"      /* command codes + i2c_required_len(): shared */
+#include "stepper_logic.h"  /* stepper_clamp_speed / stepper_move_target */
 
 static int16_t parse_be16s(const uint8_t *b)
 {
@@ -53,26 +40,11 @@ static int32_t parse_be32(const uint8_t *b)
            ((int32_t)b[2] << 8) | (int32_t)b[3];
 }
 
-static uint16_t clamp_speed(uint16_t speed)
-{
-    if (speed == 0)
-        speed = 1; /* Minimum speed */
-    if (speed > MAX_STEP_SPEED)
-        speed = MAX_STEP_SPEED; /* Maximum speed */
-    return speed;
-}
-
-/* Mirrors the guard in stepper_move(). Uses unsigned arithmetic so the
-   two's-complement wrap is well defined on the host (the firmware relies on the
-   same wrap on the STM8). */
+/* Thin wrapper over the shared helper so the assertions stay readable. */
 static int target_would_overflow(int32_t position, int16_t steps)
 {
-    uint32_t wrapped = (uint32_t)position + (uint32_t)(int32_t)steps;
-    int32_t new_target = (int32_t)wrapped;
-    if ((steps > 0 && new_target < position) ||
-        (steps < 0 && new_target > position))
-        return 1;
-    return 0;
+    int32_t target;
+    return stepper_move_target(position, steps, &target) != 0;
 }
 
 static int tests_run = 0;
@@ -92,7 +64,6 @@ static void test_required_len(void)
     /* Commands that carry 16-bit payloads need 4 bytes */
     CHECK(i2c_required_len(0x01) == 4); /* move      */
     CHECK(i2c_required_len(0x02) == 4); /* set speed */
-    CHECK(i2c_required_len(0x07) == 4); /* calibrate */
 
     /* Commands that carry only the motor index need 2 bytes */
     CHECK(i2c_required_len(0x03) == 2); /* stop       */
@@ -103,6 +74,9 @@ static void test_required_len(void)
     CHECK(i2c_required_len(0x06) == 1); /* reset      */
     CHECK(i2c_required_len(0xFF) == 1); /* version    */
     CHECK(i2c_required_len(0x00) == 1); /* unknown    */
+    CHECK(i2c_required_len(0x07) == 1); /* calibrate removed in 2.0.0 -> unknown */
+    CHECK(i2c_required_len(0x08) == 1); /* unknown: adding a command must update
+                                           i2c_proto.h and this test together */
     CHECK(i2c_required_len(0x42) == 1); /* unknown    */
 }
 
@@ -137,20 +111,43 @@ static void test_big_endian_parsing(void)
 
 static void test_speed_clamp(void)
 {
-    CHECK(clamp_speed(0) == 1);              /* zero -> minimum     */
-    CHECK(clamp_speed(1) == 1);
-    CHECK(clamp_speed(MAX_STEP_SPEED) == MAX_STEP_SPEED);
-    CHECK(clamp_speed(MAX_STEP_SPEED + 1) == MAX_STEP_SPEED);
-    CHECK(clamp_speed(65535) == MAX_STEP_SPEED);
+    CHECK(stepper_clamp_speed(0, MAX_STEP_SPEED) == 1);              /* zero -> minimum */
+    CHECK(stepper_clamp_speed(1, MAX_STEP_SPEED) == 1);
+    CHECK(stepper_clamp_speed(MAX_STEP_SPEED, MAX_STEP_SPEED) == MAX_STEP_SPEED);
+    CHECK(stepper_clamp_speed(MAX_STEP_SPEED + 1, MAX_STEP_SPEED) == MAX_STEP_SPEED);
+    CHECK(stepper_clamp_speed(65535, MAX_STEP_SPEED) == MAX_STEP_SPEED);
+}
+
+/* Mirrors i2c_process_command()'s field extraction: the 16-bit payload of
+   move/set-speed lives in bytes 2..3 of the frame
+   [cmd][motor][hi][lo]. (A regression that read bytes 4..5 always got 0.) */
+static int16_t extract_steps(const uint8_t *rx) { return parse_be16s(rx + 2); }
+static uint16_t extract_speed(const uint8_t *rx) { return parse_be16u(rx + 2); }
+
+/* Mirrors the shared motor-index guard (motor >= 2 is rejected). */
+static int motor_valid(uint8_t m) { return m < 2; }
+
+static void test_payload_offset(void)
+{
+    /* set speed frame: 0x02 0x00 0x01 0xF4 -> speed 500 at bytes 2..3 */
+    uint8_t set_speed[6] = { 0x02, 0x00, 0x01, 0xF4, 0x00, 0x00 };
+    CHECK(extract_speed(set_speed) == 500);
+
+    /* move frame: 0x01 0x00 0x00 0x64 -> +100 steps */
+    uint8_t move[6] = { 0x01, 0x00, 0x00, 0x64, 0x00, 0x00 };
+    CHECK(extract_steps(move) == 100);
+
+    /* negative move: 0x01 0x01 0xFF 0x9C -> -100 steps */
+    uint8_t move_neg[6] = { 0x01, 0x01, 0xFF, 0x9C, 0x00, 0x00 };
+    CHECK(extract_steps(move_neg) == -100);
 }
 
 static void test_motor_index(void)
 {
-    /* stepper_* reject motor >= 2; the checks mirror that guard. */
-    CHECK((0u < 2u) == 1); /* motor 0 valid */
-    CHECK((1u < 2u) == 1); /* motor 1 valid */
-    CHECK((2u < 2u) == 0); /* motor 2 rejected */
-    CHECK((3u < 2u) == 0); /* motor 3 rejected */
+    CHECK(motor_valid(0) == 1); /* motor 0 valid */
+    CHECK(motor_valid(1) == 1); /* motor 1 valid */
+    CHECK(motor_valid(2) == 0); /* motor 2 rejected */
+    CHECK(motor_valid(3) == 0); /* motor 3 rejected */
 }
 
 static void test_int32_overflow_guard(void)
@@ -170,6 +167,7 @@ int main(void)
     test_required_len();
     test_big_endian_parsing();
     test_speed_clamp();
+    test_payload_offset();
     test_motor_index();
     test_int32_overflow_guard();
 

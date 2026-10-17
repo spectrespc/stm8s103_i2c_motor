@@ -8,67 +8,31 @@
 
 ## 2. Features
 - I²C slave addr 0x60, 100 kHz standard mode
-- 2 stepper motors: focus + zoom (STEP/DIR/ENABLE, active-low EN)
-- TIM1 PWM step generation, 1 ms system tick (TIM4)
+- 2 bipolar stepper motors: focus + zoom, driven directly by two DRV8833
+  H-bridges (full-step, both coils energised)
+- Step generation by a 1 ms DDA in the TIM4 ISR (1–5000 steps/sec), no STEP/DIR
 - IWDG watchdog ~500 ms, fed in main loop + TIM4 ISR
 - EEPROM position persistence with CRC16
-- Limit switch inputs with 5 ms debounce
+- nFAULT monitoring (overcurrent/thermal/UVLO) → latched ERROR, motor coasted
 - I²C error recovery (AF/BERR/OVR → software reset, 2 s timeout)
 - HSI 16 MHz, no external crystal
 
 ## 3. Hardware Requirements
 - **External pull-ups on PB4/PB5 (I²C): 4.7 kΩ to VDD — MANDATORY** (true open-drain, no internal pull-ups)
-- External pull-ups on PA1/PA2 (limit switches): 10 kΩ to VDD recommended
-- Stepper drivers: any STEP/DIR driver (A4988, DRV8825, TMC2208)
-- Power: 3.3V or 5V (STM8S103 tolerates 2.95–5.5V)
+- Stepper drivers: 2× DRV8833 (one per motor), plus a 0.01 µF VCP cap and a
+  10 µF VM bulk cap per chip
+- Power: 3.3V or 5V (STM8S103 tolerates 2.95–5.5V); DRV8833 VM 2.7–10.8V
 - SWIM programming: connect PD1 to ST-LINK SWIM, NRST to ST-LINK RST
 
-## 4. Pin Map (TSSOP20)
-```
-     ┌─────────────────┐
-     │  PB5  PB4  PB3 │
-     │  PC1  PC2  PC3 │
-     │  PC4  PC5  PC6 │
-     │  PC7  PD1  PD2 │
-     │  PA1  PA2  PD3 │
-     │  PA3  PD4  PD5 │
-     │  PD6  PD7  NRST │
-     └─────────────────┘
-
-     Pin 1: PD4 (LED_STATUS)
-     Pin 2: PD3
-     Pin 3: PD2
-     Pin 4: PD1 (ZOOM_EN) - SWIM pin
-     Pin 5: PA3
-     Pin 6: PA2 (ZOOM_LIMIT)
-     Pin 7: PA1 (FOCUS_LIMIT)
-     Pin 8: PB1
-     Pin 9: PB2
-     Pin 10: PB3
-     Pin 11: PB4 (I2C_SCL)
-     Pin 12: PB5 (I2C_SDA)
-     Pin 13: PC3 (FOCUS_STEP)
-     Pin 14: PC4 (FOCUS_DIR)
-     Pin 15: PC5 (FOCUS_EN)
-     Pin 16: PC6 (ZOOM_STEP)
-     Pin 17: PC7 (ZOOM_DIR)
-     Pin 18: PD1 (ZOOM_EN)
-     Pin 19: NRST
-     Pin 20: VDD
-```
+## 4. Pin Map
+The authoritative TSSOP20 pin map and project signal assignment is in
+[docs/HARDWARE.md](docs/HARDWARE.md). Note that PB0–PB3 are not bonded on the
+TSSOP20 package, so all coil/nSLEEP/nFAULT signals use ports A, C and D.
 
 ## 5. I²C Protocol Summary
-```
-Commands:
-- 0x01: Move motor (int16 steps)
-- 0x02: Set speed (uint16 steps/sec)
-- 0x03: Stop motor
-- 0x04: Get position (int32)
-- 0x05: Get status (uint8)
-- 0x06: Reset controller
-- 0x07: Calibrate (move to limit at speed)
-- 0xFF: Get firmware version (3 bytes)
-```
+Full command reference (payloads, byte order, response sizes) is in
+[docs/PROTOCOL.md](docs/PROTOCOL.md). Command codes are 0x01–0x06 and 0xFF
+(0x07 calibrate was removed in 2.0.0).
 
 ## 6. Building from Source
 This project requires:
@@ -81,8 +45,8 @@ Sources are organised into functional modules:
 src/
 ├── core/   main.c, main.h, stm8s_conf.h
 ├── hal/    hw_config.c/h, stm8s_it.c/h
-├── i2c/    i2c_slave.c/h
-└── motor/  stepper.c/h, eeprom.c/h
+├── i2c/    i2c_slave.c/h, i2c_proto.h (shared command table)
+└── motor/  stepper.c/h, stepper_logic.h (pure DDA/phase), eeprom.c/h
 ```
 
 To build the firmware (run from the repository root):
@@ -116,13 +80,15 @@ i2ctransfer -y 7 w2@0x60 0x05 0x00 r1
 ```
 
 ## 8. Known Limitations
-- TIM1 shared ARR: motors run at same speed or sequentially
-- No acceleration ramp (v2)
-- PD1 conflicts with SWIM during programming
-- EEPROM endurance: writes throttled to ≤ 1 Hz
+- Open-loop: position is software-only (no encoder feedback). A blocked/skipped
+  motor is detected only via nFAULT (overcurrent), not by position loss.
+- No acceleration ramp
+- A move is ignored until a speed has been set (`motorctl speed …` first)
+- EEPROM endurance: writes throttled to ≤ 1 Hz and skipped while a motor runs
 
 ## 9. Troubleshooting
-- SWIM error 0x04: check power, SWIM connection, NRST
+- SWIM error 0x04: check power, SWIM connection, NRST (PD1 must be unloaded)
 - I²C not detected: check external pull-ups on PB4/PB5
-- No step pulses: check TIM1_CtrlPWMOutputs call, MOE bit
+- Motor does not turn: set a speed first, then move; check DRV8833 nSLEEP wiring
+- Motor instantly reports ERROR: check for DRV8833 nFAULT (short/overcurrent)
 - WDT reset loop: ensure IWDG_ReloadCounter() called

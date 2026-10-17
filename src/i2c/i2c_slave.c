@@ -29,6 +29,7 @@
 #include "stm8s_conf.h"
 #include "main.h"
 #include "i2c_slave.h"
+#include "i2c_proto.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ----------------------------------------------------------*/
@@ -49,7 +50,7 @@ void i2c_slave_reset(void);
 uint8_t i2c_check_timeout(void);
 void i2c_isr_handler(void);
 void i2c_prepare_read_response(void);
-uint8_t i2c_required_len(uint8_t cmd);
+/* i2c_required_len() is defined in i2c_proto.h (shared with host tests). */
 
 /* Private functions ------------------------------------------------------*/
 
@@ -190,28 +191,6 @@ void i2c_isr_handler(void)
 }
 
 /**
-  * @brief  Minimum number of received bytes required for a valid command.
-  * @param  cmd : command code (i2c_rx_buf[0])
-  * @retval required length in bytes
-  */
-uint8_t i2c_required_len(uint8_t cmd)
-{
-    switch (cmd)
-    {
-        case 0x01: /* move:      cmd, motor, steps_hi, steps_lo */
-        case 0x02: /* set speed: cmd, motor, speed_hi, speed_lo */
-        case 0x07: /* calibrate: cmd, motor, speed_hi, speed_lo */
-            return 4;
-        case 0x03: /* stop:       cmd, motor */
-        case 0x04: /* get pos:    cmd, motor */
-        case 0x05: /* get status: cmd, motor */
-            return 2;
-        default:   /* 0x06 reset, 0xFF version, unknown */
-            return 1;
-    }
-}
-
-/**
   * @brief  Prepare the transmit buffer for read-type commands.
   *         Called from the I2C ISR when the slave is addressed as a
   *         transmitter (i.e. on the repeated START of a combined write+read
@@ -256,7 +235,7 @@ void i2c_prepare_read_response(void)
             i2c_tx_idx = 0;
             break;
         case 0xFF: /* Firmware version */
-            i2c_tx_buf[0] = 1; /* Major */
+            i2c_tx_buf[0] = 2; /* Major */
             i2c_tx_buf[1] = 0; /* Minor */
             i2c_tx_buf[2] = 0; /* Patch */
             i2c_tx_idx = 0;
@@ -277,8 +256,10 @@ void i2c_process_command(void)
 {
     uint8_t cmd = i2c_rx_buf[0];
     uint8_t motor = i2c_rx_buf[1];
+    /* steps/speed share the same 16-bit payload position (bytes 2..3); the
+       frame is [cmd][motor][hi][lo], so reading bytes 4..5 always returned 0. */
     int16_t steps = (int16_t)(((uint16_t)i2c_rx_buf[2] << 8) | i2c_rx_buf[3]);
-    uint16_t speed = ((uint16_t)i2c_rx_buf[4] << 8) | i2c_rx_buf[5];
+    uint16_t speed = ((uint16_t)i2c_rx_buf[2] << 8) | i2c_rx_buf[3];
 
     /* Ignore a command that was not fully received, so stale buffer bytes can
        never drive motor/speed/position. */
@@ -300,11 +281,9 @@ void i2c_process_command(void)
             WWDG->CR = 0xBF;
             while(1);
             break;
-        case 0x07: /* Calibrate */
-            stepper_calibrate(motor, speed);
-            break;
         default:
-            /* Read commands (0x04/0x05/0xFF) are handled in the ISR */
+            /* Read commands (0x04/0x05/0xFF) are handled in the ISR; unknown
+               commands (including the removed 0x07 calibrate) are ignored. */
             break;
     }
 }
