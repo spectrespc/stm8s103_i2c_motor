@@ -1,5 +1,7 @@
 # Hardware Connection Guide
 
+> 🇷🇺 [Русская версия](HARDWARE.ru.md)
+
 ## Board / MCU
 - STM8S103F3P6, TSSOP20 package
 - No external crystal — HSI 16 MHz

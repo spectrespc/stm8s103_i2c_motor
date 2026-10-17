@@ -1,5 +1,7 @@
 # Tests
 
+> 🇷🇺 [Русская версия](README.ru.md)
+
 Host-side (Linux + gcc) unit tests for the I²C command handling logic.
 
 ## Running

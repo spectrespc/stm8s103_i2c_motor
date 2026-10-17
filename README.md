@@ -1,5 +1,7 @@
 # STM8S103F3P6 Dual Stepper Motor Controller (I²C Slave)
 
+> 🇷🇺 [Русская версия](README.ru.md)
+
 ## 1. Quick Start
 - Requirements: SDCC ≥ 4.0, STM8-SPL-SDCC in ~/STM8-SPL-SDCC, stm8flash, ST-LINK/v2
 - Building: `make clean && make` → build/firmware.ihx

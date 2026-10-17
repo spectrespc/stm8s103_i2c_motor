@@ -1,5 +1,7 @@
 # motorctl - I2C Utility for STM8S103 Motor Controller
 
+> 🇷🇺 [Русская версия](README.ru.md)
+
 This utility allows controlling the STM8S103 dual stepper motor controller over I2C.
 
 ## Building

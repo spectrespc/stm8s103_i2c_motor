@@ -1,5 +1,7 @@
 # I²C Protocol Specification — STM8S103 Motor Controller
 
+> 🇷🇺 [Русская версия](PROTOCOL.ru.md)
+
 ## Bus Parameters
 - Speed: Standard mode (100 kHz)
 - Slave address: 0x60 (7-bit)
