@@ -20,6 +20,9 @@
 #define DEFAULT_BUS 7
 #define DEFAULT_ADDR 0x60
 
+/* Slave address used by the raw I2C_RDWR transfers. Set from -a in main(). */
+static int g_slave_addr = DEFAULT_ADDR;
+
 // Motor IDs
 #define MOTOR_FOCUS 0x00
 #define MOTOR_ZOOM 0x01
@@ -59,9 +62,13 @@ int main(int argc, char *argv[]) {
     int fd;
     int opt;
     int ret = 0;
+    int a;
     
-    // Parse command line options
-    while ((opt = getopt(argc, argv, "b:a:h")) != -1) {
+    // Parse command line options. The leading '+' puts getopt into POSIX mode
+    // so it stops at the first non-option argument, which lets negative values
+    // such as "-200" reach the command arguments instead of being parsed as
+    // options.
+    while ((opt = getopt(argc, argv, "+b:a:h")) != -1) {
         switch (opt) {
             case 'b':
                 bus = atoi(optarg);
@@ -77,6 +84,8 @@ int main(int argc, char *argv[]) {
                 return 1;
         }
     }
+    a = optind;
+    g_slave_addr = addr;
     
     // Open I2C device
     fd = open_i2c_device(bus, addr);
@@ -85,11 +94,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Handle commands
-    if (argc < 2) {
+    // Handle commands. All command arguments are read relative to optind so
+    // that leading -b/-a options do not shift them.
+    if (argc - a < 1) {
         usage(argv[0]);
         ret = 1;
-    } else if (strcmp(argv[1], "version") == 0) {
+    } else if (strcmp(argv[a], "version") == 0) {
         uint8_t version[3];
         if (get_version(fd, version) == 0) {
             printf("Firmware version: %d.%d.%d\n", version[0], version[1], version[2]);
@@ -97,14 +107,14 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Failed to get version\n");
             ret = 1;
         }
-    } else if (strcmp(argv[1], "speed") == 0) {
-        if (argc < 4) {
+    } else if (strcmp(argv[a], "speed") == 0) {
+        if (argc - a < 3) {
             fprintf(stderr, "Usage: %s speed <motor> <speed>\n", argv[0]);
             ret = 1;
         } else {
-            uint8_t motor = (strcmp(argv[2], "focus") == 0) ? MOTOR_FOCUS : 
-                          (strcmp(argv[2], "zoom") == 0) ? MOTOR_ZOOM : 0xFF;
-            uint16_t speed = atoi(argv[3]);
+            uint8_t motor = (strcmp(argv[a+1], "focus") == 0) ? MOTOR_FOCUS : 
+                          (strcmp(argv[a+1], "zoom") == 0) ? MOTOR_ZOOM : 0xFF;
+            uint16_t speed = atoi(argv[a+2]);
             
             if (motor == 0xFF) {
                 fprintf(stderr, "Invalid motor specified\n");
@@ -121,14 +131,14 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
-    } else if (strcmp(argv[1], "move") == 0) {
-        if (argc < 4) {
+    } else if (strcmp(argv[a], "move") == 0) {
+        if (argc - a < 3) {
             fprintf(stderr, "Usage: %s move <motor> <steps>\n", argv[0]);
             ret = 1;
         } else {
-            uint8_t motor = (strcmp(argv[2], "focus") == 0) ? MOTOR_FOCUS : 
-                         (strcmp(argv[2], "zoom") == 0) ? MOTOR_ZOOM : 0xFF;
-            int16_t steps = atoi(argv[3]);
+            uint8_t motor = (strcmp(argv[a+1], "focus") == 0) ? MOTOR_FOCUS : 
+                         (strcmp(argv[a+1], "zoom") == 0) ? MOTOR_ZOOM : 0xFF;
+            int16_t steps = atoi(argv[a+2]);
             
             if (motor == 0xFF) {
                 fprintf(stderr, "Invalid motor specified\n");
@@ -142,13 +152,13 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
-    } else if (strcmp(argv[1], "position") == 0) {
-        if (argc < 3) {
+    } else if (strcmp(argv[a], "position") == 0) {
+        if (argc - a < 2) {
             fprintf(stderr, "Usage: %s position <motor>\n", argv[0]);
             ret = 1;
         } else {
-            uint8_t motor = (strcmp(argv[2], "focus") == 0) ? MOTOR_FOCUS : 
-                            (strcmp(argv[2], "zoom") == 0) ? MOTOR_ZOOM : 0xFF;
+            uint8_t motor = (strcmp(argv[a+1], "focus") == 0) ? MOTOR_FOCUS : 
+                            (strcmp(argv[a+1], "zoom") == 0) ? MOTOR_ZOOM : 0xFF;
             int32_t position;
             
             if (motor == 0xFF) {
@@ -163,13 +173,13 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
-    } else if (strcmp(argv[1], "status") == 0) {
-        if (argc < 3) {
+    } else if (strcmp(argv[a], "status") == 0) {
+        if (argc - a < 2) {
             fprintf(stderr, "Usage: %s status <motor>\n", argv[0]);
             ret = 1;
         } else {
-            uint8_t motor = (strcmp(argv[2], "focus") == 0) ? MOTOR_FOCUS : 
-                       (strcmp(argv[2], "zoom") == 0) ? MOTOR_ZOOM : 0xFF;
+            uint8_t motor = (strcmp(argv[a+1], "focus") == 0) ? MOTOR_FOCUS : 
+                       (strcmp(argv[a+1], "zoom") == 0) ? MOTOR_ZOOM : 0xFF;
             uint8_t status;
             
             if (motor == 0xFF) {
@@ -191,13 +201,13 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
-    } else if (strcmp(argv[1], "stop") == 0) {
-        if (argc < 3) {
+    } else if (strcmp(argv[a], "stop") == 0) {
+        if (argc - a < 2) {
             fprintf(stderr, "Usage: %s stop <motor>\n", argv[0]);
             ret = 1;
         } else {
-            uint8_t motor = (strcmp(argv[2], "focus") == 0) ? MOTOR_FOCUS : 
-                         (strcmp(argv[2], "zoom") == 0) ? MOTOR_ZOOM : 0xFF;
+            uint8_t motor = (strcmp(argv[a+1], "focus") == 0) ? MOTOR_FOCUS : 
+                         (strcmp(argv[a+1], "zoom") == 0) ? MOTOR_ZOOM : 0xFF;
             
             if (motor == 0xFF) {
                 fprintf(stderr, "Invalid motor specified\n");
@@ -211,7 +221,7 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
-    } else if (strcmp(argv[1], "reset") == 0) {
+    } else if (strcmp(argv[a], "reset") == 0) {
         if (reset_controller(fd) == 0) {
             printf("Controller reset successful\n");
         } else {
@@ -219,7 +229,7 @@ int main(int argc, char *argv[]) {
             ret = 1;
         }
     } else {
-        fprintf(stderr, "Unknown command: %s\n", argv[1]);
+        fprintf(stderr, "Unknown command: %s\n", argv[a]);
         usage(argv[0]);
         ret = 1;
     }
@@ -267,7 +277,6 @@ int send_command(int fd, uint8_t cmd, uint8_t motor, const uint8_t *write_data, 
     struct i2c_msg msgs[2];
     struct i2c_rdwr_ioctl_data ioctl_data;
     uint8_t write_buf[10];
-    uint8_t read_buf[10];
     int write_len_total = 0;
     
     // Prepare write buffer
@@ -285,7 +294,7 @@ int send_command(int fd, uint8_t cmd, uint8_t motor, const uint8_t *write_data, 
     }
     
     // Write-only command
-    msgs[0].addr = 0x60; // Slave address
+    msgs[0].addr = g_slave_addr; // Slave address
     msgs[0].flags = 0;   // Write
     msgs[0].len = write_len_total;
     msgs[0].buf = write_buf;
@@ -316,12 +325,12 @@ int send_command_with_read(int fd, uint8_t cmd, uint8_t motor, const uint8_t *wr
     }
     
     // Write then read
-    msgs[0].addr = 0x60;
+    msgs[0].addr = g_slave_addr;
     msgs[0].flags = 0; // Write
     msgs[0].len = write_len_total;
     msgs[0].buf = write_buf;
     
-    msgs[1].addr = 0x60;
+    msgs[1].addr = g_slave_addr;
     msgs[1].flags = I2C_M_RD; // Read
     msgs[1].len = read_len;
     msgs[1].buf = read_data;
