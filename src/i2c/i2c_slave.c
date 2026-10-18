@@ -177,15 +177,21 @@ void i2c_isr_handler(void)
 
     /* --- Error flags (SR2: BERR/ARLO/AF/OVR) ---
        AF is set by hardware on the master's NACK of the last read byte - this
-       is normal for every read transaction. All of these flags MUST be cleared,
-       otherwise the error interrupt re-fires forever and starves the rest of
-       the system. A PE 0->1 toggle clears BERR and AF; writing SR2 clears the
-       rest. */
+       is normal for every read transaction, not a fault. BERR/ARLO/AF/OVR are
+       all cleared by writing 0 to those SR2 bits (the same sequence the SPL's
+       I2C_ClearFlag uses). Do NOT clear them with a PE 0->1 toggle: disabling
+       the peripheral while the bus is live desynchronises the slave, which made
+       back-to-back reads fail until the idle-timeout reset recovered it. Only a
+       genuine bus error (BERR/ARLO/OVR) re-arms the peripheral. */
     if (sr2 & 0x0F)
     {
-        I2C->CR1 &= (uint8_t)~0x01;   /* PE = 0: clears BERR/AF */
-        I2C->CR1 |= 0x01;             /* PE = 1 */
-        I2C->SR2 &= (uint8_t)~0x0F;   /* clear any remaining error bits */
+        uint8_t fatal = sr2 & 0x0B;          /* BERR | ARLO | OVR */
+        I2C->SR2 = (uint8_t)~(uint8_t)0x0F;  /* clear BERR/ARLO/AF/OVR */
+        if (fatal)
+        {
+            I2C->CR1 &= (uint8_t)~0x01;      /* PE = 0 */
+            I2C->CR1 |= 0x01;                /* PE = 1: re-arm after a bus error */
+        }
         i2c_state = 0;
     }
 }
