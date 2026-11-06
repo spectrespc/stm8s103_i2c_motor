@@ -15,14 +15,21 @@
   ST-LINK/v2. В OKO SDK есть готовый образ `tools/stm8-sdcc` (Debian
   bookworm, SDCC 4.2).
 - Сборка (из корня репозитория): `make` (или `make -f Makefile.stm8 all`)
-  → `build/app.ihx` (обновление по I2C), `build/factory.ihx` (ST-Link),
-  `build/app.bin`. В OKO SDK та же сборка запускается в `tools/stm8-sdcc`:
+  → `build/app-2.0.1.ihx` (обновление по I2C), `build/factory-2.0.1.ihx`
+  (ST-Link), `build/app-2.0.1.bin`; версия берётся из `src/core/main.h`.
+  Безымянные `build/app.ihx`, `build/factory.ihx` и `build/app.bin` —
+  копии для ST-Link-скриптов, но `/api/flash` принимает только имя с версией
+  (из него она и берётся). В OKO SDK та же сборка запускается в
+  `tools/stm8-sdcc`:
   `docker run --rm -v "$PWD:/work" -w /work oko-stm8-sdcc make -f Makefile.stm8 all`
 - Хост-утилита: `make -C util` → `util/motorctl`.
-- Прошивка: первый раз `factory.ihx` по ST-Link/SWIM (`docs/BOOTLOADER.md`),
-  далее `oko-motor flash build/app.ihx` по I2C или `/api/flash` в WebUI OKO.
-- Офлайн-проверка: `oko-motor check build/app.ihx` (без I2C, код 0/2);
-  выход из загрузчика — `oko-motor boot-reset`.
+- Прошивка: первый раз `factory-2.0.1.ihx` по ST-Link/SWIM
+  (`docs/BOOTLOADER.md`), далее `oko-motor flash build/app-2.0.1.ihx` по I2C
+  или `/api/flash` в WebUI OKO (загружать имя с версией).
+- Офлайн-проверка: `oko-motor check build/app-2.0.1.ihx` (без I2C, код 0/2);
+  `oko-motor check FILE 2.0.1` дополнительно отвергает имя, версия которого
+  не совпадает с заголовком OKO8 (код 2). Выход из загрузчика —
+  `oko-motor boot-reset`.
 - Проверка: `i2cdetect -y 3` (должен показать 0x60; шину выберите под свой хост)
 
 ## 2. Возможности
@@ -77,8 +84,9 @@ docker run --rm -v "$PWD:/work" -w /work \
   oko-stm8-sdcc make -f Makefile.stm8 all
 ```
 
-`Makefile.stm8` линкует приложение на `0x8A10`, проверяет размер и создаёт
-`build/app.ihx`/`build/factory.ihx`. Все промежуточные артефакты
+`Makefile.stm8` линкует приложение на `0x8A10`, берёт версию из
+`src/core/main.h`, проверяет размер и создаёт
+`build/app-<версия>.ihx`/`build/factory-<версия>.ihx`. Все промежуточные артефакты
 (.rel, .asm, .lst, .map, ...) записываются в build/ и не отслеживаются git.
 Host-тесты протокола находятся в tests/ и запускаются командой
 `make -C tests test`.

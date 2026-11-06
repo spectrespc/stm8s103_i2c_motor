@@ -28,16 +28,28 @@ APP_SRC  := src/core/main.c src/hal/hw_config.c src/hal/stm8s_it.c \
 BOOT_OBJ := $(addprefix $(BUILD)/boot_,$(notdir $(BOOT_SRC:.c=.rel)))
 APP_OBJ  := $(addprefix $(BUILD)/app_,$(notdir $(APP_SRC:.c=.rel)))
 
+# The application version lives in src/core/main.h and also names the
+# artifacts, so the WebUI can derive the expected version from the file name.
+# The unversioned app.ihx/factory.ihx/app.bin stay as copies for ST-Link
+# procedures and older documentation; they are not accepted by /api/flash.
+APP_VERSION := $(shell awk '/APP_VERSION_(MAJOR|MINOR|PATCH)/{printf "%s.", $$3}' \
+	src/core/main.h | sed 's/\.$$//')
+
 BOOT_IHX    := $(BUILD)/boot.ihx
 APP_FW_IHX  := $(BUILD)/app-firmware.ihx
-APP_IHX     := $(BUILD)/app.ihx
-FACTORY_IHX := $(BUILD)/factory.ihx
+APP_IHX     := $(BUILD)/app-$(APP_VERSION).ihx
+FACTORY_IHX := $(BUILD)/factory-$(APP_VERSION).ihx
+APP_BIN     := $(BUILD)/app-$(APP_VERSION).bin
+APP_IHX_ALIAS     := $(BUILD)/app.ihx
+FACTORY_IHX_ALIAS := $(BUILD)/factory.ihx
+APP_BIN_ALIAS     := $(BUILD)/app.bin
 
 HEADERS := $(wildcard src/*/*.h) $(wildcard src/common/*.h)
 
 .PHONY: all boot app factory clean flash verify size
 
-all: $(APP_IHX) $(FACTORY_IHX)
+all: $(APP_IHX) $(FACTORY_IHX) $(APP_IHX_ALIAS) $(FACTORY_IHX_ALIAS) \
+     $(APP_BIN_ALIAS)
 
 $(SPL_LIB):
 	$(MAKE) -C $(SPL_ROOT)/Libraries/STM8S_StdPeriph_Driver DEVICE=$(DEVICE)
@@ -73,11 +85,23 @@ $(APP_FW_IHX): $(APP_OBJ) $(SPL_LIB) $(BUILD)
 		-L$(dir $(SPL_LIB)) -lspl
 
 # Header at 0x8A00 + app at 0x8A10; mkapp.py also enforces the size gate.
-$(APP_IHX): $(APP_FW_IHX) $(BOOT_IHX) tools/mkapp.py Makefile.stm8
+# All three outputs share one recipe.  They are independent targets, so
+# serialize them: a parallel make would otherwise run mkapp.py concurrently
+# for the same files.
+.NOTPARALLEL: $(APP_IHX) $(FACTORY_IHX) $(APP_BIN)
+$(APP_IHX) $(FACTORY_IHX) $(APP_BIN): $(APP_FW_IHX) $(BOOT_IHX) \
+		tools/mkapp.py Makefile.stm8
 	python3 tools/mkapp.py --boot $(BOOT_IHX) --app $(APP_FW_IHX) \
-		--out $(APP_IHX) --factory $(FACTORY_IHX) --bin $(BUILD)/app.bin
+		--out $(APP_IHX) --factory $(FACTORY_IHX) --bin $(APP_BIN)
 
-$(FACTORY_IHX): $(APP_IHX) $(BOOT_IHX)
+$(APP_IHX_ALIAS): $(APP_IHX)
+	cp -f $< $@
+
+$(FACTORY_IHX_ALIAS): $(FACTORY_IHX)
+	cp -f $< $@
+
+$(APP_BIN_ALIAS): $(APP_BIN)
+	cp -f $< $@
 
 boot: $(BOOT_IHX)
 app: $(APP_IHX)

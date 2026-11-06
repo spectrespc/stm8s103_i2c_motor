@@ -16,16 +16,21 @@
   the first factory write. The OKO SDK also provides a ready Docker image in
   `tools/stm8-sdcc` (Debian bookworm, SDCC 4.2).
 - Building (from the repository root): `make` (or
-  `make -f Makefile.stm8 all`) → `build/app.ihx` (I2C update),
-  `build/factory.ihx` (ST-Link), `build/app.bin`. In the OKO SDK the same
-  command runs in `tools/stm8-sdcc`:
+  `make -f Makefile.stm8 all`) → `build/app-2.0.1.ihx` (I2C update),
+  `build/factory-2.0.1.ihx` (ST-Link), `build/app-2.0.1.bin`; the version
+  comes from `src/core/main.h`. Unversioned `build/app.ihx`,
+  `build/factory.ihx` and `build/app.bin` are copies for ST-Link scripts, but
+  `/api/flash` only accepts a versioned name (it derives the version from it).
+  In the OKO SDK the same command runs in `tools/stm8-sdcc`:
   `docker run --rm -v "$PWD:/work" -w /work oko-stm8-sdcc make -f Makefile.stm8 all`
 - Host utility: `make -C util` → `util/motorctl`.
-- Flashing: first time `factory.ihx` over ST-Link/SWIM (see
-  `docs/BOOTLOADER.md`); later `oko-motor flash build/app.ihx` over I2C or
-  `/api/flash` in the OKO WebUI.
-- Offline validation: `oko-motor check build/app.ihx` (no I2C, exit 0/2);
-  leave the bootloader with `oko-motor boot-reset`.
+- Flashing: first time `factory-2.0.1.ihx` over ST-Link/SWIM (see
+  `docs/BOOTLOADER.md`); later `oko-motor flash build/app-2.0.1.ihx` over I2C
+  or `/api/flash` in the OKO WebUI (upload the versioned name).
+- Offline validation: `oko-motor check build/app-2.0.1.ihx` (no I2C, exit
+  0/2); `oko-motor check FILE 2.0.1` also rejects a name whose version differs
+  from the OKO8 header (exit 2). Leave the bootloader with
+  `oko-motor boot-reset`.
 - Testing: `i2cdetect -y 3` (the OKO board uses I2C3; adjust the bus for your
   host).
 
@@ -81,9 +86,10 @@ docker run --rm -v "$PWD:/work" -w /work \
   oko-stm8-sdcc make -f Makefile.stm8 all
 ```
 
-`Makefile.stm8` links the application at `0x8A10` and rejects an oversized
-image before writing it. `tools/mkapp.py` writes the 16-byte header at `0x8A00`
-(magic `OKO8`, length, version, CRC32) and the `factory.ihx` merge. `Makefile`
+`Makefile.stm8` links the application at `0x8A10`, takes the version from
+`src/core/main.h` and rejects an oversized image before writing it.
+`tools/mkapp.py` writes the 16-byte header at `0x8A00` (magic `OKO8`, length,
+version, CRC32) and the `factory-<version>.ihx` merge. `Makefile`
 is dual-mode: standalone it includes `Makefile.stm8`, while the OKO SDK
 (where `../Makefile.param` exists) uses it to cross-compile `oko-motor`. All
 intermediate

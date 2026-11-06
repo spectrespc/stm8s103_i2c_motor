@@ -59,7 +59,8 @@ static void usage(void)
         "  reset                software reset of the application\n"
         "  enter-boot           ask the application for the bootloader\n"
         "  boot-reset           leave the bootloader and start the application\n"
-        "  check FILE           validate FILE offline (no I2C), exit 0/2\n"
+        "  check FILE [X.Y.Z]   validate FILE offline (no I2C), exit 0/2;\n"
+        "                       with X.Y.Z also compare the header version\n"
         "  flash FILE           flash app.ihx/.hex or app.bin (with header)\n"
         "  verify FILE          compare the flashed CRC with FILE\n"
         "\n"
@@ -698,6 +699,23 @@ static int parse_addr(const char *text, uint8_t *address)
     return 0;
 }
 
+/* The WebUI derives the expected application version from the file name;
+ * this parser mirrors that format strictly: three decimal bytes. */
+static int parse_version_text(const char *text, uint8_t version[3])
+{
+    unsigned major, minor, patch;
+    char tail;
+
+    if (sscanf(text, "%u.%u.%u%c", &major, &minor, &patch, &tail) != 3)
+        return -1;
+    if (major > 255 || minor > 255 || patch > 255)
+        return -1;
+    version[0] = (uint8_t)major;
+    version[1] = (uint8_t)minor;
+    version[2] = (uint8_t)patch;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     int opt;
@@ -746,13 +764,36 @@ int main(int argc, char **argv)
     if (!strcmp(command, "check"))
     {
         const char *file = (optind < argc) ? argv[optind] : NULL;
+        uint8_t expected[3];
 
         if (!file)
         {
             usage();
             return 2;
         }
-        return load_firmware(file) == 0 ? 0 : 2;
+        if (load_firmware(file) != 0)
+            return 2;
+        if (optind + 1 < argc)
+        {
+            if (parse_version_text(argv[optind + 1], expected))
+            {
+                fprintf(stderr, "invalid version: %s (expected X.Y.Z)\n",
+                        argv[optind + 1]);
+                return 2;
+            }
+            if (expected[0] != fw_header.major ||
+                expected[1] != fw_header.minor ||
+                expected[2] != fw_header.patch)
+            {
+                fprintf(stderr,
+                        "%s: header version %u.%u.%u does not match %u.%u.%u\n",
+                        file, fw_header.major, fw_header.minor,
+                        fw_header.patch, expected[0], expected[1],
+                        expected[2]);
+                return 2;
+            }
+        }
+        return 0;
     }
 
     if (!strcmp(command, "info") || !strcmp(command, "version") ||
