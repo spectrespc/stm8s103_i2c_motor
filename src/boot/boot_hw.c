@@ -11,6 +11,23 @@
  * moves a motor, but it must not leave a driver awake after a reset. */
 static void boot_gpio_init(void)
 {
+#if defined(BOARD_TEST)
+    /* Test bench wiring: PA1 = focus nSLEEP, PA3 = zoom nSLEEP.
+     * DDR=1, CR1=0 -> push-pull output, ODR=0 -> LOW (driver asleep).
+     * Do NOT copy the historical PD3 sequence below: it clears DDR and only
+     * touches CR1, which leaves the pin a floating input. */
+    GPIOA->DDR |= (uint8_t)((1u << 1) | (1u << 3));
+    GPIOA->CR1 &= (uint8_t)~((1u << 1) | (1u << 3));
+    GPIOA->ODR &= (uint8_t)~((1u << 1) | (1u << 3));
+
+    /* PA2 = focus nFAULT, PD6 = zoom nFAULT: input + pull-up (DDR=0, CR1=1,
+     * CR2=0).  Coil lines stay in their reset floating-input state: the
+     * DRV8833 coil inputs have 150k pulldowns, so the outputs coast. */
+    GPIOA->DDR &= (uint8_t)~(1u << 2);
+    GPIOA->CR1 |= (uint8_t)(1u << 2);
+    GPIOD->DDR &= (uint8_t)~(1u << 6);
+    GPIOD->CR1 |= (uint8_t)(1u << 6);
+#else
     /* PD2 = focus nFAULT (pull-up input), PD3 = focus nSLEEP (low output) */
     GPIOD->DDR &= (uint8_t)~((1u << 2) | (1u << 3));
     GPIOD->CR1 |= (uint8_t)((1u << 2) | (1u << 3));
@@ -23,6 +40,7 @@ static void boot_gpio_init(void)
     GPIOA->DDR |= (uint8_t)(1u << 1);
     GPIOA->CR1 |= (uint8_t)(1u << 1);
     GPIOA->ODR &= (uint8_t)~(1u << 1);
+#endif
 
     /* PB4/PB5: open-drain outputs for I2C (external 4.7k pull-ups). */
     GPIOB->DDR |= (uint8_t)((1u << 4) | (1u << 5));

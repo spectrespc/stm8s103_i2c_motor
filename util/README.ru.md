@@ -32,6 +32,8 @@ Commands:
   version        Get firmware version
   speed <motor> <speed>  Set motor speed
   move <motor> <steps>  Move motor by steps
+  set-pos <motor> <value>  Force the logical position (no motion, 2.0.2+)
+  home <motor> [speed]  Drive to the negative stop, then zero (bench)
   position <motor>    Get motor position
   status <motor>  Get motor status
   stop <motor>    Stop motor
@@ -70,6 +72,16 @@ motorctl status zoom
 Остановить двигатель focus:
 ```bash
 motorctl stop focus
+```
+
+Принудительно задать позицию zoom = 0 без движения (прошивка 2.0.2+):
+```bash
+motorctl set-pos zoom 0
+```
+
+Прижать focus к отрицательному упору на 300 шагов/с и обнулить (стенд):
+```bash
+motorctl home focus 300
 ```
 
 Сбросить контроллер:

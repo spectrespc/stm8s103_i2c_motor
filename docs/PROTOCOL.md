@@ -24,6 +24,7 @@
 | 0x06 | [cmd] | — | Software reset controller |
 | 0x07 | [cmd] | — | Enter the I2C bootloader (OKO fork) |
 | 0x08 | [cmd] | [role][maj][min][pat] | Get role (0=app, 1=boot) and version (shared with the bootloader) |
+| 0x09 | [cmd][motor][pos_0..pos_3] | — | Force the logical position (int32 BE) without moving; ignored while RUNNING (2.0.2+) |
 | 0xFF | [cmd] | [maj][min][pat] | Get firmware version (3 bytes; application only) |
 
 ## Detailed Command Examples
@@ -31,7 +32,7 @@
 ### Version Request
 ```bash
 i2ctransfer -y 3 w1@0x60 0xFF r3
-# Response: 0x02 0x00 0x01 (version 2.0.1)
+# Response: 0x02 0x00 0x02 (version 2.0.2)
 ```
 
 ### Set Speed
@@ -71,6 +72,18 @@ i2ctransfer -y 3 w2@0x60 0x03 0x01
 # Reset controller
 i2ctransfer -y 3 w1@0x60 0x06
 ```
+
+### Set Position (zero the scale)
+```bash
+# Force the focus position to 0 without driving the motor
+i2ctransfer -y 3 w6@0x60 0x09 0x00 0x00 0x00 0x00 0x00
+# Verify the readback with 0x04; EEPROM persistence follows within ~1 s
+```
+
+**Known defect (KI-042):** on 2.0.2/2.1.1 a move that ends below zero leaves
+the logical position with a corrupted top byte (`-1` reads as `0xFBFFFFFF`),
+although the motor travels the commanded number of steps. Do not use a
+negative `GET_POS` value for control; send `SET_POS(0)` after homing instead.
 
 ## Error Handling
 - Unknown commands are ignored (no NACK); 0x07 is ENTER_BOOT in this fork.

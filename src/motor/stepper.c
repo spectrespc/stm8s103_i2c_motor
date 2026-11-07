@@ -58,12 +58,25 @@ void stepper_init(void)
     steppers[0].phase = 0;
     steppers[0].step_acc = 0;
     steppers[0].wake_ticks = 0;
+
+#if defined(BOARD_TEST)
+    /* Test bench wiring (12 signals, TSSOP20 pins): focus DRV8833 on
+       PD5/PC7/PD3/PD2 + PA1/PA2, zoom DRV8833 on PC4/PC3/PC6/PC5 + PA3/PD6. */
+    steppers[0].ain1_port = GPIOD; steppers[0].ain1_pin = GPIO_PIN_5;
+    steppers[0].ain2_port = GPIOC; steppers[0].ain2_pin = GPIO_PIN_7;
+    steppers[0].bin1_port = GPIOD; steppers[0].bin1_pin = GPIO_PIN_3;
+    steppers[0].bin2_port = GPIOD; steppers[0].bin2_pin = GPIO_PIN_2;
+    steppers[0].nsleep_port = GPIOA; steppers[0].nsleep_pin = GPIO_PIN_1;
+    steppers[0].nfault_port = GPIOA; steppers[0].nfault_pin = GPIO_PIN_2;
+#else
+    /* Production lens wiring: focus DRV8833 on PC3/PC4/PC5/PC6 + PD3/PD2. */
     steppers[0].ain1_port = GPIOC; steppers[0].ain1_pin = GPIO_PIN_3;
     steppers[0].ain2_port = GPIOC; steppers[0].ain2_pin = GPIO_PIN_4;
     steppers[0].bin1_port = GPIOC; steppers[0].bin1_pin = GPIO_PIN_5;
     steppers[0].bin2_port = GPIOC; steppers[0].bin2_pin = GPIO_PIN_6;
     steppers[0].nsleep_port = GPIOD; steppers[0].nsleep_pin = GPIO_PIN_3;
     steppers[0].nfault_port = GPIOD; steppers[0].nfault_pin = GPIO_PIN_2;
+#endif
 
     /* Zoom DRV8833 */
     steppers[1].position = 0;
@@ -73,12 +86,23 @@ void stepper_init(void)
     steppers[1].phase = 0;
     steppers[1].step_acc = 0;
     steppers[1].wake_ticks = 0;
+
+#if defined(BOARD_TEST)
+    steppers[1].ain1_port = GPIOC; steppers[1].ain1_pin = GPIO_PIN_4;
+    steppers[1].ain2_port = GPIOC; steppers[1].ain2_pin = GPIO_PIN_3;
+    steppers[1].bin1_port = GPIOC; steppers[1].bin1_pin = GPIO_PIN_6;
+    steppers[1].bin2_port = GPIOC; steppers[1].bin2_pin = GPIO_PIN_5;
+    steppers[1].nsleep_port = GPIOA; steppers[1].nsleep_pin = GPIO_PIN_3;
+    steppers[1].nfault_port = GPIOD; steppers[1].nfault_pin = GPIO_PIN_6;
+#else
+    /* Production lens wiring: zoom DRV8833 on PD5/PD6/PA3/PC7 + PA1/PA2. */
     steppers[1].ain1_port = GPIOD; steppers[1].ain1_pin = GPIO_PIN_5;
     steppers[1].ain2_port = GPIOD; steppers[1].ain2_pin = GPIO_PIN_6;
     steppers[1].bin1_port = GPIOA; steppers[1].bin1_pin = GPIO_PIN_3;
     steppers[1].bin2_port = GPIOC; steppers[1].bin2_pin = GPIO_PIN_7;
     steppers[1].nsleep_port = GPIOA; steppers[1].nsleep_pin = GPIO_PIN_1;
     steppers[1].nfault_port = GPIOA; steppers[1].nfault_pin = GPIO_PIN_2;
+#endif
 
     /* Start with both drivers asleep and both motors coasting. */
     GPIO_WriteLow(steppers[0].nsleep_port, steppers[0].nsleep_pin);
@@ -114,6 +138,28 @@ void stepper_move(uint8_t motor, int16_t steps)
         s->wake_ticks = STEPPER_WAKE_TICKS;
     GPIO_WriteHigh(s->nsleep_port, s->nsleep_pin);
     s->state = STATUS_RUNNING;
+}
+
+/**
+  * @brief  Force the logical position of a motor without moving it.
+  *         Used by the host to zero the scale after homing.  The command is
+  *         ignored while the motor is stepping: overwriting the position in the
+  *         middle of a move would make the DDA jump to an arbitrary target.
+  *         IDLE and ERROR are accepted (ERROR recovery is a use-case).
+  */
+void stepper_set_position(uint8_t motor, int32_t position)
+{
+    stepper_t *s;
+
+    if (motor >= 2) return;
+    s = &steppers[motor];
+
+    if (s->state == STATUS_RUNNING) return;
+
+    /* No GPIO access: the coils and nSLEEP stay exactly as they are. */
+    s->position = position;
+    s->target = position;
+    eeprom_dirty = 1; /* persist the new scale */
 }
 
 void stepper_stop(uint8_t motor)
@@ -158,6 +204,17 @@ void stepper_tick(void)
         if (s->state != STATUS_RUNNING)
             continue;
 
+        /* Let a freshly woken driver settle before the first step.  nSLEEP
+           has just risen, and the DRV8833 may still hold nFAULT low during
+           its wake window (tWAKE <= 1 ms), so nFAULT must be sampled only
+           after this delay: sampling it first caused spurious STATUS_ERROR
+           on ~15-25% of moves that followed an idle period. */
+        if (s->wake_ticks > 0)
+        {
+            s->wake_ticks--;
+            continue;
+        }
+
         /* nFAULT is open-drain and LOW on fault (overcurrent/thermal/UVLO). */
         if (GPIO_ReadInputPin(s->nfault_port, s->nfault_pin) == RESET)
         {
@@ -167,13 +224,6 @@ void stepper_tick(void)
             s->step_acc = 0;
             s->wake_ticks = 0;
             eeprom_dirty = 1;
-            continue;
-        }
-
-        /* Let a freshly woken driver settle before the first step. */
-        if (s->wake_ticks > 0)
-        {
-            s->wake_ticks--;
             continue;
         }
 

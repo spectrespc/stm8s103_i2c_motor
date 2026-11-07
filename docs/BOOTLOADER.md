@@ -79,5 +79,5 @@ docker run --rm --device=/dev/bus/usb -v "$PWD:/work" \
   -w /work oko-stm8-sdcc \
   make -f Makefile.stm8 flash
 # later, over I2C from the device (the name carries the version)
-oko-motor flash build/app-2.0.1.ihx
+oko-motor flash build/app-2.0.2.ihx
 ```

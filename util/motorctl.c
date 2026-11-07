@@ -2,7 +2,7 @@
  * oko-motor - host utility for the OKO STM8S103F3P6 focus/zoom controller.
  *
  * Bus 3 and address 0x60 are the OKO defaults.  The utility understands the
- * application protocol (0x01..0x07, 0xFF) and the I2C bootloader
+ * application protocol (0x01..0x09, 0xFF) and the I2C bootloader
  * (0x10..0x14, see docs/BOOTLOADER.md).
  *
  * Exit codes: 0 success, 1 transfer/flash error, 2 usage or blocked.
@@ -55,6 +55,8 @@ static void usage(void)
         "  position MOTOR       motor position in steps\n"
         "  speed MOTOR VALUE    set speed in steps/s (1..5000)\n"
         "  move MOTOR STEPS     relative move\n"
+        "  set-pos MOTOR VALUE  force the logical position without moving\n"
+        "  home MOTOR [SPEED]   drive to the negative stop, then zero (bench)\n"
         "  stop MOTOR           stop one motor\n"
         "  reset                software reset of the application\n"
         "  enter-boot           ask the application for the bootloader\n"
@@ -103,7 +105,19 @@ static void lock_release(void)
 
 static int parse_motor(const char *text, uint8_t *motor)
 {
-    long v = strtol(text, NULL, 0);
+    long v;
+
+    if (!strcmp(text, "focus"))
+    {
+        *motor = 0;
+        return 0;
+    }
+    if (!strcmp(text, "zoom"))
+    {
+        *motor = 1;
+        return 0;
+    }
+    v = strtol(text, NULL, 0);
     if (v != 0 && v != 1)
         return -1;
     *motor = (uint8_t)v;
@@ -632,6 +646,143 @@ static int cmd_move(int fd, uint8_t motor, int16_t steps)
     return app_u16_command(fd, I2C_CMD_MOVE, motor, (uint16_t)steps) ? 1 : 0;
 }
 
+/* SET_POS (0x09): [cmd][motor][int32 BE], applied only when not RUNNING.
+   The firmware silently ignores unknown commands, so the write is verified
+   with a position readback: a 2.0.1 controller would leave the old value. */
+static int cmd_set_pos(int fd, uint8_t motor, int32_t position)
+{
+    uint8_t frame[6];
+    int32_t readback = 0;
+
+    frame[0] = I2C_CMD_SET_POS;
+    frame[1] = motor;
+    frame[2] = (uint8_t)((uint32_t)position >> 24);
+    frame[3] = (uint8_t)((uint32_t)position >> 16);
+    frame[4] = (uint8_t)((uint32_t)position >> 8);
+    frame[5] = (uint8_t)(uint32_t)position;
+    if (app_write(fd, frame, sizeof(frame)))
+        return 1;
+    usleep(10000);
+    if (read_motor_position(fd, motor, &readback) < 0 ||
+        readback != position)
+    {
+        fprintf(stderr, "SET_POS is not supported by this firmware "
+                "(readback %ld); update to 2.0.2/2.1.1\n", (long)readback);
+        return 1;
+    }
+    return 0;
+}
+
+/* Poll status until the motor reports IDLE.  Returns 0 on IDLE, 1 on ERROR,
+   -1 on timeout / I2C failure. */
+static int wait_idle(int fd, uint8_t motor, int timeout_ms)
+{
+    int waited = 0;
+
+    while (waited <= timeout_ms)
+    {
+        uint8_t status = 0xFF;
+
+        if (read_motor_status(fd, motor, &status) < 0)
+            return -1;
+        if (status == 0)
+            return 0;
+        if (status == 2)
+            return 1;
+        usleep(20000);
+        waited += 20;
+    }
+    return -1;
+}
+
+/* Client-side homing for the bench: drive towards the mechanical stop in
+   negative chunks, then force the position to zero and verify the readback.
+   The firmware itself has no homing command; this mirrors the divinus job. */
+static int cmd_home(int fd, uint8_t motor, uint16_t speed)
+{
+    static const int margin = 25;
+    static const int max_chunks = 40;
+    int32_t position = 0;
+    uint8_t status = 0xFF;
+    int max_pos = motor == 0 ? 2935 : 2275;   /* datasheet travel, bench tool */
+    long remaining;
+    int chunk;
+
+    if (read_motor_status(fd, motor, &status) < 0)
+    {
+        fprintf(stderr, "no application response\n");
+        return 1;
+    }
+    if (status == 2)
+    {
+        fprintf(stderr, "driver fault (status 2); clear it first\n");
+        return 1;
+    }
+    if (status == 1)
+    {
+        uint8_t stop_frame[2] = { I2C_CMD_STOP, motor };
+        if (app_write(fd, stop_frame, sizeof(stop_frame)))
+            return 1;
+        usleep(20000);
+    }
+    if (read_motor_position(fd, motor, &position) < 0)
+    {
+        fprintf(stderr, "cannot read the position\n");
+        return 1;
+    }
+    /* Corrupted RAM (observed after a long stall with BOR off) shows up as a
+       huge value; refuse to home rather than travel for minutes. */
+    if (position < -1000 || position > max_pos + 1000)
+    {
+        fprintf(stderr, "position %ld looks corrupted; use set-pos 0 instead\n",
+                (long)position);
+        return 1;
+    }
+    if (cmd_speed(fd, motor, speed) != 0)
+        return 1;
+
+    /* Step count is open-loop after the single position read: firmware 2.0.2/
+       2.1.1 stores a wrong top byte for negative positions, so the final
+       SET_POS(0) is the source of truth. */
+    remaining = (long)position + margin;
+    for (chunk = 0; chunk < max_chunks && remaining > 0; chunk++)
+    {
+        int32_t delta = remaining > 32000 ? 32000 : (int32_t)remaining;
+        int timeout_ms;
+        int rc;
+
+        if (cmd_move(fd, motor, (int16_t)-delta) != 0)
+            return 1;
+        timeout_ms = (int)((delta * 1000) / (int)speed) + 3000;
+        rc = wait_idle(fd, motor, timeout_ms);
+        if (rc != 0)
+        {
+            fprintf(stderr, "homing stopped: %s\n",
+                    rc > 0 ? "driver fault (status 2)" : "timeout");
+            return 1;
+        }
+        remaining -= delta;
+    }
+    if (remaining > 0)
+    {
+        fprintf(stderr, "homing did not complete: %ld steps left\n",
+                remaining);
+        return 1;
+    }
+
+    if (cmd_set_pos(fd, motor, 0) != 0)
+        return 1;
+    usleep(10000);
+    if (read_motor_position(fd, motor, &position) < 0 || position != 0)
+    {
+        fprintf(stderr, "SET_POS is not supported by this firmware "
+                "(position %ld); update to 2.0.2/2.1.1\n", (long)position);
+        return 1;
+    }
+    printf("home: motor %u at 0\n", (unsigned)motor);
+    return 0;
+}
+
 static int cmd_stop(int fd, uint8_t motor)
 {
     uint8_t frame[2] = { I2C_CMD_STOP, motor };
@@ -863,6 +1014,43 @@ int main(int argc, char **argv)
             }
             else
                 rc = cmd_move(fd, motor, (int16_t)steps);
+        }
+    }
+    else if (!strcmp(command, "set-pos"))
+    {
+        uint8_t motor;
+        long value;
+        if (optind + 1 >= argc || parse_motor(argv[optind], &motor))
+            rc = 2;
+        else
+        {
+            value = strtol(argv[optind + 1], NULL, 0);
+            if (value < (-2147483647L - 1) || value > 2147483647L)
+            {
+                fprintf(stderr, "position must fit int32\n");
+                rc = 2;
+            }
+            else
+                rc = cmd_set_pos(fd, motor, (int32_t)value);
+        }
+    }
+    else if (!strcmp(command, "home"))
+    {
+        uint8_t motor;
+        long speed = 300;
+        if (optind >= argc || parse_motor(argv[optind], &motor))
+            rc = 2;
+        else
+        {
+            if (optind + 1 < argc)
+                speed = strtol(argv[optind + 1], NULL, 0);
+            if (speed < 1 || speed > 5000)
+            {
+                fprintf(stderr, "speed must be 1..5000\n");
+                rc = 2;
+            }
+            else
+                rc = cmd_home(fd, motor, (uint16_t)speed);
         }
     }
     else if (!strcmp(command, "stop"))

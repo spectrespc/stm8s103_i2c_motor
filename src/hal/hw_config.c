@@ -65,8 +65,9 @@ void hw_clock_init(void)
   * BIN1/BIN2 for coil B) plus nSLEEP (output) and nFAULT (input). There is no
   * STEP/DIR interface: the MCU sequences the coils itself (see stepper.c).
   *
-  * TSSOP20 note: PB0-PB3 are NOT bonded out on the STM8S103F3P6 TSSOP20 (only
-  * PB4/PB5 exist), so all coil/sleep/fault signals use port A/C/D pins.
+  * TSSOP20 note: PB0-PB3 are NOT bonded out on the STM8S003F3P6 /
+  * STM8S103F3P6 TSSOP20 (only PB4/PB5 exist), so all coil/sleep/fault
+  * signals use port A/C/D pins.
   * @param  None
   * @retval None
   */
@@ -80,7 +81,23 @@ void hw_gpio_init(void)
     
     /* PB4/PB5 - I2C SCL/SDA (open-drain) */
     GPIO_Init(GPIOB, GPIO_PIN_4 | GPIO_PIN_5, GPIO_MODE_OUT_OD_HIZ_FAST);
-    
+
+#if defined(BOARD_TEST)
+    /* --- Test bench wiring (STM8S003F3P6) ---
+       Focus DRV8833: PD5=AIN1, PC7=AIN2, PD3=BIN1, PD2=BIN2,
+       PA1=nSLEEP (LOW = sleep), PA2=nFAULT (pull-up input).
+       Zoom DRV8833:  PC4=AIN1, PC3=AIN2, PC6=BIN1, PC5=BIN2,
+       PA3=nSLEEP, PD6=nFAULT (pull-up input). */
+    GPIO_Init(GPIOC, GPIO_PIN_3 | GPIO_PIN_4 | GPIO_PIN_5 | GPIO_PIN_6 |
+                      GPIO_PIN_7,
+              GPIO_MODE_OUT_PP_LOW_FAST);
+    GPIO_Init(GPIOD, GPIO_PIN_2 | GPIO_PIN_3 | GPIO_PIN_5,
+              GPIO_MODE_OUT_PP_LOW_FAST);
+    GPIO_Init(GPIOA, GPIO_PIN_1 | GPIO_PIN_3, GPIO_MODE_OUT_PP_LOW_FAST);
+    /* nFAULT is open-drain; the internal pull-up is enough (1 uA leakage). */
+    GPIO_Init(GPIOA, GPIO_PIN_2, GPIO_MODE_IN_PU_NO_IT);
+    GPIO_Init(GPIOD, GPIO_PIN_6, GPIO_MODE_IN_PU_NO_IT);
+#else
     /* --- Focus DRV8833 ---
        PC3=AIN1, PC4=AIN2, PC5=BIN1, PC6=BIN2 (coil outputs, start coasting) */
     GPIO_Init(GPIOC, GPIO_PIN_3 | GPIO_PIN_4 | GPIO_PIN_5 | GPIO_PIN_6,
@@ -99,6 +116,7 @@ void hw_gpio_init(void)
     GPIO_Init(GPIOA, GPIO_PIN_1, GPIO_MODE_OUT_PP_LOW_FAST);
     /* PA2 - nFAULT (pull-up) */
     GPIO_Init(GPIOA, GPIO_PIN_2, GPIO_MODE_IN_PU_NO_IT);
+#endif
     
     /* PD4 - LED_STATUS (PP low) */
     GPIO_Init(GPIOD, GPIO_PIN_4, GPIO_MODE_OUT_PP_LOW_FAST);

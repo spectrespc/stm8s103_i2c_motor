@@ -42,6 +42,7 @@ extern stepper_t steppers[2];
 
 void stepper_init(void);
 void stepper_move(uint8_t motor, int16_t steps);
+void stepper_set_position(uint8_t motor, int32_t position);
 void stepper_stop(uint8_t motor);
 void stepper_set_speed(uint8_t motor, uint16_t speed);
 void stepper_tick(void);

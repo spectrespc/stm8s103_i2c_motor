@@ -16,19 +16,19 @@
   the first factory write. The OKO SDK also provides a ready Docker image in
   `tools/stm8-sdcc` (Debian bookworm, SDCC 4.2).
 - Building (from the repository root): `make` (or
-  `make -f Makefile.stm8 all`) → `build/app-2.0.1.ihx` (I2C update),
-  `build/factory-2.0.1.ihx` (ST-Link), `build/app-2.0.1.bin`; the version
+  `make -f Makefile.stm8 all`) → `build/app-2.0.2.ihx` (I2C update),
+  `build/factory-2.0.2.ihx` (ST-Link), `build/app-2.0.2.bin`; the version
   comes from `src/core/main.h`. Unversioned `build/app.ihx`,
   `build/factory.ihx` and `build/app.bin` are copies for ST-Link scripts, but
   `/api/flash` only accepts a versioned name (it derives the version from it).
   In the OKO SDK the same command runs in `tools/stm8-sdcc`:
   `docker run --rm -v "$PWD:/work" -w /work oko-stm8-sdcc make -f Makefile.stm8 all`
 - Host utility: `make -C util` → `util/motorctl`.
-- Flashing: first time `factory-2.0.1.ihx` over ST-Link/SWIM (see
-  `docs/BOOTLOADER.md`); later `oko-motor flash build/app-2.0.1.ihx` over I2C
+- Flashing: first time `factory-2.0.2.ihx` over ST-Link/SWIM (see
+  `docs/BOOTLOADER.md`); later `oko-motor flash build/app-2.0.2.ihx` over I2C
   or `/api/flash` in the OKO WebUI (upload the versioned name).
-- Offline validation: `oko-motor check build/app-2.0.1.ihx` (no I2C, exit
-  0/2); `oko-motor check FILE 2.0.1` also rejects a name whose version differs
+- Offline validation: `oko-motor check build/app-2.0.2.ihx` (no I2C, exit
+  0/2); `oko-motor check FILE 2.0.2` also rejects a name whose version differs
   from the OKO8 header (exit 2). Leave the bootloader with
   `oko-motor boot-reset`.
 - Testing: `i2cdetect -y 3` (the OKO board uses I2C3; adjust the bus for your
@@ -57,11 +57,16 @@ The authoritative TSSOP20 pin map and project signal assignment is in
 [docs/HARDWARE.md](docs/HARDWARE.md). Note that PB0–PB3 are not bonded on the
 TSSOP20 package, so all coil/nSLEEP/nFAULT signals use ports A, C and D.
 
+The OKO test board uses a different pin map and is built with
+`make -f Makefile.stm8 all BOARD=test` (firmware **2.1.1**, chip
+STM8S003F3P6); see [docs/HARDWARE_TESTBOARD.md](docs/HARDWARE_TESTBOARD.md).
+That build must never be flashed into the production lens.
+
 ## 5. I²C Protocol Summary
 Full command reference (payloads, byte order, response sizes) is in
-[docs/PROTOCOL.md](docs/PROTOCOL.md). Application command codes are 0x01–0x08
-and 0xFF; 0x07 is ENTER_BOOT and 0x08 is GET_STATE (role + version) in this
-fork. The bootloader protocol
+[docs/PROTOCOL.md](docs/PROTOCOL.md). Application command codes are 0x01–0x09
+and 0xFF; 0x07 is ENTER_BOOT, 0x08 is GET_STATE (role + version) and 0x09 is
+SET_POS (force the position, 2.0.2+) in this fork. The bootloader protocol
 (0x10–0x14) is in [docs/BOOTLOADER.md](docs/BOOTLOADER.md).
 
 ## 6. Building from Source

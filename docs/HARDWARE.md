@@ -7,6 +7,13 @@
 - No external crystal — HSI 16 MHz
 - PA1/PA2 are used as GPIO (OSCIN/OSCOUT unused)
 
+> **MCU note (OKO).** The chip on both boards is actually an **STM8S003F3P6**;
+> the STM8S103F3P6 is the register-compatible part the build targets. Their
+> TSSOP20 pinouts are identical (DS7147 Table 6), so this table applies to
+> both. The S003 has **128 bytes** of data EEPROM (not 1024); the firmware
+> writes 10 bytes at `0x4000`, so it fits. The `BOARD=test` variant uses a
+> different pin map — see [HARDWARE_TESTBOARD.md](HARDWARE_TESTBOARD.md).
+
 ## Package constraint
 On the **TSSOP20** package only **PB4/PB5** of port B are bonded out; **PB0–PB3
 do not exist** on this package. All coil / nSLEEP / nFAULT signals therefore use

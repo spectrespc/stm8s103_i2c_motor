@@ -15,19 +15,19 @@
   ST-LINK/v2. В OKO SDK есть готовый образ `tools/stm8-sdcc` (Debian
   bookworm, SDCC 4.2).
 - Сборка (из корня репозитория): `make` (или `make -f Makefile.stm8 all`)
-  → `build/app-2.0.1.ihx` (обновление по I2C), `build/factory-2.0.1.ihx`
-  (ST-Link), `build/app-2.0.1.bin`; версия берётся из `src/core/main.h`.
+  → `build/app-2.0.2.ihx` (обновление по I2C), `build/factory-2.0.2.ihx`
+  (ST-Link), `build/app-2.0.2.bin`; версия берётся из `src/core/main.h`.
   Безымянные `build/app.ihx`, `build/factory.ihx` и `build/app.bin` —
   копии для ST-Link-скриптов, но `/api/flash` принимает только имя с версией
   (из него она и берётся). В OKO SDK та же сборка запускается в
   `tools/stm8-sdcc`:
   `docker run --rm -v "$PWD:/work" -w /work oko-stm8-sdcc make -f Makefile.stm8 all`
 - Хост-утилита: `make -C util` → `util/motorctl`.
-- Прошивка: первый раз `factory-2.0.1.ihx` по ST-Link/SWIM
-  (`docs/BOOTLOADER.md`), далее `oko-motor flash build/app-2.0.1.ihx` по I2C
+- Прошивка: первый раз `factory-2.0.2.ihx` по ST-Link/SWIM
+  (`docs/BOOTLOADER.md`), далее `oko-motor flash build/app-2.0.2.ihx` по I2C
   или `/api/flash` в WebUI OKO (загружать имя с версией).
-- Офлайн-проверка: `oko-motor check build/app-2.0.1.ihx` (без I2C, код 0/2);
-  `oko-motor check FILE 2.0.1` дополнительно отвергает имя, версия которого
+- Офлайн-проверка: `oko-motor check build/app-2.0.2.ihx` (без I2C, код 0/2);
+  `oko-motor check FILE 2.0.2` дополнительно отвергает имя, версия которого
   не совпадает с заголовком OKO8 (код 2). Выход из загрузчика —
   `oko-motor boot-reset`.
 - Проверка: `i2cdetect -y 3` (должен показать 0x60; шину выберите под свой хост)
@@ -58,10 +58,16 @@
 [docs/HARDWARE.md](docs/HARDWARE.md). Учтите, что PB0–PB3 отсутствуют на корпусе
 TSSOP20, поэтому все сигналы обмоток/nSLEEP/nFAULT используют порты A, C и D.
 
+Тестовая плата OKO использует другую карту и собирается командой
+`make -f Makefile.stm8 all BOARD=test` (прошивка **2.1.1**, чип
+STM8S003F3P6); см. [docs/HARDWARE_TESTBOARD.md](docs/HARDWARE_TESTBOARD.md).
+Эту сборку нельзя прошивать в продуктовый объектив.
+
 ## 5. Краткое описание протокола I²C
 Полный справочник команд (полезная нагрузка, порядок байтов, размеры ответов)
-находится в [docs/PROTOCOL.md](docs/PROTOCOL.md). Коды команд — 0x01–0x06 и 0xFF
-(команда calibrate 0x07 удалена в 2.0.0).
+находится в [docs/PROTOCOL.md](docs/PROTOCOL.md). Коды команд — 0x01–0x09 и
+0xFF: 0x07 — ENTER_BOOT, 0x08 — GET_STATE (роль и версия), 0x09 — SET_POS
+(принудительная установка позиции, 2.0.2+).
 
 ## 6. Сборка из исходников
 Для проекта требуются:

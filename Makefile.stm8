@@ -8,6 +8,11 @@
 #   docker run --rm -v "$PWD:/work" -w /work/project/app/stm8-motor \
 #       oko-stm8-sdcc make -f Makefile.stm8 all
 #
+# Board variants: BOARD=oko (default, production lens pin map) or BOARD=test
+# (STM8S003F3P6 test bench wiring).  The pin map is selected at compile time;
+# build/.board records the variant and forces a full recompile when BOARD
+# changes, so a mixed build cannot silently flash the wrong pin map.
+#
 # Layout: boot 0x8000..0x89FF, header 0x8A00..0x8A0F, app 0x8A10..0x9FFF.
 SPL_ROOT ?= $(HOME)/STM8-SPL-SDCC
 SPL_INC  := $(SPL_ROOT)/Libraries/STM8S_StdPeriph_Driver/inc
@@ -21,6 +26,28 @@ INCLUDE  := -Isrc/core -Isrc/hal -Isrc/i2c -Isrc/motor -Isrc/common \
             -I$(SPL_INC) -I$(SPL_CONF)
 BUILD    := build
 
+# The test board uses a different pin map and therefore gets a different minor
+# version: 2.1.1 can never be mistaken for the 2.0.2 production firmware, and
+# neither /api/flash nor `oko-motor check` accepts the wrong artifact.
+BOARD ?= oko
+ifeq ($(BOARD),test)
+CFLAGS      += -DBOARD_TEST \
+               -DAPP_VERSION_MAJOR=2 -DAPP_VERSION_MINOR=1 -DAPP_VERSION_PATCH=1
+APP_VERSION := 2.1.1
+else
+APP_VERSION := $(shell awk '/define[[:space:]]+APP_VERSION_(MAJOR|MINOR|PATCH)/{printf "%s.", $$3}' \
+	src/core/main.h | sed 's/\.$$//')
+endif
+
+# stm8flash device profile; both boards carry an STM8S003F3P6 (the STM8S103
+# SPL/register set above is used because both dies share the same register map).
+FLASH_DEV ?= stm8s003f3
+
+# Records the BOARD the objects were compiled for.  The .rel files do not
+# depend on BOARD themselves, so without this marker a BOARD switch would only
+# relink old objects and mislabel them with the new version.
+BOARD_STAMP := $(BUILD)/.board
+
 BOOT_SRC := src/boot/boot.c src/boot/boot_hw.c src/boot/boot_i2c.c \
             src/boot/boot_flash.c src/common/oko_crc.c
 APP_SRC  := src/core/main.c src/hal/hw_config.c src/hal/stm8s_it.c \
@@ -32,8 +59,7 @@ APP_OBJ  := $(addprefix $(BUILD)/app_,$(notdir $(APP_SRC:.c=.rel)))
 # artifacts, so the WebUI can derive the expected version from the file name.
 # The unversioned app.ihx/factory.ihx/app.bin stay as copies for ST-Link
 # procedures and older documentation; they are not accepted by /api/flash.
-APP_VERSION := $(shell awk '/APP_VERSION_(MAJOR|MINOR|PATCH)/{printf "%s.", $$3}' \
-	src/core/main.h | sed 's/\.$$//')
+# APP_VERSION itself is set above, per BOARD variant.
 
 BOOT_IHX    := $(BUILD)/boot.ihx
 APP_FW_IHX  := $(BUILD)/app-firmware.ihx
@@ -46,7 +72,7 @@ APP_BIN_ALIAS     := $(BUILD)/app.bin
 
 HEADERS := $(wildcard src/*/*.h) $(wildcard src/common/*.h)
 
-.PHONY: all boot app factory clean flash verify size
+.PHONY: all boot app factory clean flash verify size FORCE
 
 all: $(APP_IHX) $(FACTORY_IHX) $(APP_IHX_ALIAS) $(FACTORY_IHX_ALIAS) \
      $(APP_BIN_ALIAS)
@@ -56,6 +82,16 @@ $(SPL_LIB):
 
 $(BUILD):
 	mkdir -p $(BUILD)
+
+# Rewrite the marker only when BOARD actually changed; each object depends on
+# it, so a variant switch recompiles all sources instead of relinking stale ones.
+FORCE:
+
+$(BOARD_STAMP): FORCE | $(BUILD)
+	@printf '%s\n' '$(BOARD)' | cmp -s - $@ || \
+		printf '%s\n' '$(BOARD)' > $@
+
+$(BOOT_OBJ) $(APP_OBJ): $(BOARD_STAMP)
 
 # --- bootloader: register-level, no SPL library objects -------------------
 $(BUILD)/boot_%.rel: src/boot/%.c $(HEADERS) | $(BUILD)
@@ -92,6 +128,7 @@ $(APP_FW_IHX): $(APP_OBJ) $(SPL_LIB) $(BUILD)
 $(APP_IHX) $(FACTORY_IHX) $(APP_BIN): $(APP_FW_IHX) $(BOOT_IHX) \
 		tools/mkapp.py Makefile.stm8
 	python3 tools/mkapp.py --boot $(BOOT_IHX) --app $(APP_FW_IHX) \
+		--version $(APP_VERSION) \
 		--out $(APP_IHX) --factory $(FACTORY_IHX) --bin $(APP_BIN)
 
 $(APP_IHX_ALIAS): $(APP_IHX)
@@ -111,10 +148,10 @@ size: $(APP_IHX)
 	python3 tools/mkapp.py --check $(BOOT_IHX) $(APP_FW_IHX)
 
 flash: $(FACTORY_IHX)
-	stm8flash -c stlinkv2 -p stm8s103f3 -s flash -w $(FACTORY_IHX)
+	stm8flash -c stlinkv2 -p $(FLASH_DEV) -s flash -w $(FACTORY_IHX)
 
 verify: $(FACTORY_IHX)
-	stm8flash -c stlinkv2 -p stm8s103f3 -s flash -v $(FACTORY_IHX)
+	stm8flash -c stlinkv2 -p $(FLASH_DEV) -s flash -v $(FACTORY_IHX)
 
 clean:
 	rm -rf $(BUILD)

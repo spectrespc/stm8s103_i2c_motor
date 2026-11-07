@@ -10,7 +10,7 @@
  *   MAX_STEP_SPEED          -> src/core/main.h
  *   i2c_required_len()      -> src/i2c/i2c_proto.h (shared with the firmware)
  *   parse_be16/parse_be32   -> src/i2c/i2c_slave.c (i2c_process_command /
- *                              i2c_prepare_read_response)
+ *                              i2c_prepare_read_response, incl. SET_POS 0x09)
  *   clamp_speed()           -> src/motor/stepper_logic.h (stepper_clamp_speed)
  *   overflow guard          -> src/motor/stepper_logic.h (stepper_move_target)
  *
@@ -76,8 +76,7 @@ static void test_required_len(void)
     CHECK(i2c_required_len(0x00) == 1); /* unknown    */
     CHECK(i2c_required_len(0x07) == 1); /* enter-boot */
     CHECK(i2c_required_len(0x08) == 1); /* get role + version */
-    CHECK(i2c_required_len(0x09) == 1); /* unknown: adding a command must update
-                                           i2c_proto.h and this test together */
+    CHECK(i2c_required_len(0x09) == 6); /* set position (int32 payload) */
     CHECK(i2c_required_len(0x42) == 1); /* unknown    */
 }
 
@@ -143,6 +142,22 @@ static void test_payload_offset(void)
     CHECK(extract_steps(move_neg) == -100);
 }
 
+/* Mirrors the SET_POS (0x09) payload extraction in i2c_process_command():
+   [cmd][motor][int32 BE] -> value at bytes 2..5. */
+static int32_t extract_set_pos(const uint8_t *rx) { return parse_be32(rx + 2); }
+
+static void test_set_pos_frame(void)
+{
+    uint8_t zero[6] = { 0x09, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    uint8_t neg[6] = { 0x09, 0x01, 0xFF, 0xFF, 0xFD, 0x90 };  /* -624 */
+    uint8_t pos[6] = { 0x09, 0x00, 0x00, 0x00, 0x0B, 0x77 };  /* 2935 */
+
+    CHECK(extract_set_pos(zero) == 0);
+    CHECK(extract_set_pos(pos) == 2935);
+    CHECK(extract_set_pos(neg) == -624);
+    CHECK(zero[1] == 0 && neg[1] == 1); /* motor index is byte 1 */
+}
+
 static void test_motor_index(void)
 {
     CHECK(motor_valid(0) == 1); /* motor 0 valid */
@@ -169,6 +184,7 @@ int main(void)
     test_big_endian_parsing();
     test_speed_clamp();
     test_payload_offset();
+    test_set_pos_frame();
     test_motor_index();
     test_int32_overflow_guard();
 

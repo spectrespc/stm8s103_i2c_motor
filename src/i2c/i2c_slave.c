@@ -291,6 +291,16 @@ void i2c_process_command(void)
         case 0x03: /* Stop */
             stepper_stop(motor);
             break;
+        case I2C_CMD_SET_POS: /* Force the logical position (int32 BE, no move) */
+            {
+                int32_t position =
+                    (int32_t)(((uint32_t)i2c_rx_buf[2] << 24) |
+                              ((uint32_t)i2c_rx_buf[3] << 16) |
+                              ((uint32_t)i2c_rx_buf[4] << 8) |
+                              (uint32_t)i2c_rx_buf[5]);
+                stepper_set_position(motor, position);
+            }
+            break;
         case 0x06: /* Software reset */
             WWDG->CR = 0xBF;
             while(1);

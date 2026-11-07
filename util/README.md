@@ -32,6 +32,8 @@ Commands:
   version        Get firmware version
   speed <motor> <speed>  Set motor speed
   move <motor> <steps>  Move motor by steps
+  set-pos <motor> <value>  Force the logical position (no motion, 2.0.2+)
+  home <motor> [speed]  Drive to the negative stop, then zero (bench)
   position <motor>    Get motor position
   status <motor>  Get motor status
   stop <motor>    Stop motor
@@ -70,6 +72,16 @@ motorctl status zoom
 Stop focus motor:
 ```bash
 motorctl stop focus
+```
+
+Force the zoom position to 0 without moving (firmware 2.0.2+):
+```bash
+motorctl set-pos zoom 0
+```
+
+Home the focus motor against the negative stop at 300 steps/s (bench):
+```bash
+motorctl home focus 300
 ```
 
 Reset controller:

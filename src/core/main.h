@@ -10,10 +10,20 @@
 
 /* Application version reported by I2C command 0xFF and written into the
  * application header by tools/mkapp.py.  Bump it on every user-visible
- * firmware change; the WebUI shows these three bytes. */
+ * firmware change; the WebUI shows these three bytes.
+ *
+ * The #ifndef guards let the Makefile override the version for a BOARD
+ * variant (-DAPP_VERSION_MINOR=1 for BOARD=test) without a redefinition
+ * error; the default build keeps the values below. */
+#ifndef APP_VERSION_MAJOR
 #define APP_VERSION_MAJOR   2
+#endif
+#ifndef APP_VERSION_MINOR
 #define APP_VERSION_MINOR   0
-#define APP_VERSION_PATCH   1
+#endif
+#ifndef APP_VERSION_PATCH
+#define APP_VERSION_PATCH   2
+#endif
 
 /* Shared with ISRs: must be volatile (and read atomically where 32-bit). */
 extern volatile uint32_t system_ticks;
@@ -40,6 +50,7 @@ void eeprom_periodic_save(void);
 
 void stepper_init(void);
 void stepper_move(uint8_t motor, int16_t steps);
+void stepper_set_position(uint8_t motor, int32_t position);
 void stepper_stop(uint8_t motor);
 void stepper_set_speed(uint8_t motor, uint16_t speed);
 void stepper_tick(void);
